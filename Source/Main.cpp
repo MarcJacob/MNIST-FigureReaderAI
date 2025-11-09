@@ -19,38 +19,33 @@
 
 #define KILOBYTES(n) (1024 * n)
 
-int Main_TestExport(int argc, char** argv)
+MNIST_Dataset LoadMNISTDataset(const char* LabelsFile, const char* ImagesFile)
 {
-	printf("Running Test Export program...\n");
+	uint8_t* labelsBuffer = (uint8_t*)malloc(KILOBYTES(60));
+	uint8_t* imagesBuffer = (uint8_t*)malloc(KILOBYTES(50000));
 
-	// Just load the entire dataset in memory, it's not that large.
-	MNIST_Dataset TrainingData;
-
-	uint8_t* trainingLabelsBuffer = (uint8_t*)malloc(KILOBYTES(60));
-	uint8_t* trainingImagesBuffer = (uint8_t*)malloc(KILOBYTES(46000));
-
-	if (trainingLabelsBuffer == nullptr || trainingImagesBuffer == nullptr)
+	if (labelsBuffer == nullptr || imagesBuffer == nullptr)
 	{
 		printf("Error: Out of memory for Dataset file reading buffers.\n");
-		return 1;
+		return {};
 	}
 
 	// TRAINING LABELS
 	{
-		HANDLE file_trainingLabels = CreateFile(PATH_TRAINING_SET_LABELS, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+		HANDLE file_trainingLabels = CreateFile(LabelsFile, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
 		if (file_trainingLabels == INVALID_HANDLE_VALUE)
 		{
-			printf("Error opening Training Labels file '%s'. Error Code = %d\n", PATH_TRAINING_SET_LABELS, GetLastError());
-			return 1;
+			printf("Error opening Dataset Labels file '%s'. Error Code = %d\n", LabelsFile, GetLastError());
+			return {};
 		}
 
 
 		DWORD readBytes = 0;
-		if (!ReadFile(file_trainingLabels, trainingLabelsBuffer, KILOBYTES(60), &readBytes, NULL))
+		if (!ReadFile(file_trainingLabels, labelsBuffer, KILOBYTES(60), &readBytes, NULL))
 		{
-			printf("Error reading Training Labels file '%s'. Error Code = %d\n", PATH_TRAINING_SET_LABELS, GetLastError());
+			printf("Error reading Dataset Labels file '%s'. Error Code = %d\n", LabelsFile, GetLastError());
 			CloseHandle(file_trainingLabels);
-			return 1;
+			return {};
 		}
 
 		CloseHandle(file_trainingLabels);
@@ -58,31 +53,56 @@ int Main_TestExport(int argc, char** argv)
 
 	// TRAINING IMAGES
 	{
-		HANDLE file_trainingImages = CreateFile(PATH_TRAINING_SET_IMAGES, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+		HANDLE file_trainingImages = CreateFile(ImagesFile, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
 		if (file_trainingImages == INVALID_HANDLE_VALUE)
 		{
-			printf("Error opening Training Images file '%s'. Error Code = %d\n", PATH_TRAINING_SET_IMAGES, GetLastError());
-			return 1;
+			printf("Error opening Dataset Images file '%s'. Error Code = %d\n", ImagesFile, GetLastError());
+			return {};
 		}
 
 
 		DWORD readBytes = 0;
-		if (!ReadFile(file_trainingImages, trainingImagesBuffer, KILOBYTES(46000), &readBytes, NULL))
+		if (!ReadFile(file_trainingImages, imagesBuffer, KILOBYTES(46000), &readBytes, NULL))
 		{
-			printf("Error reading Training Images file '%s'. Error Code = %d\n", PATH_TRAINING_SET_IMAGES, GetLastError());
+			printf("Error reading Dataset Images file '%s'. Error Code = %d\n", ImagesFile, GetLastError());
 			CloseHandle(file_trainingImages);
-			return 1;
+			return {};
 		}
 
 		CloseHandle(file_trainingImages);
 	}
 
-	TrainingData = ParseDataset(trainingLabelsBuffer, trainingImagesBuffer);
+	MNIST_Dataset Dataset = ParseDataset(labelsBuffer, imagesBuffer);
 
 	// Verify integrity of read data
-	if (TrainingData.imageCount == 0 || TrainingData.imageCount != TrainingData.labelCount)
+	if (Dataset.imageCount == 0 || Dataset.imageCount != Dataset.labelCount)
 	{
-		printf("Error: Training Image Count does not match Training Label Count (%d != %d), or failed to load appropriately !\n", TrainingData.imageCount, TrainingData.labelCount);
+		printf("Error: Dataset Image Count does not match Label Count (%d != %d), or failed to load appropriately !\n", Dataset.imageCount, Dataset.labelCount);
+		return {};
+	}
+
+	return Dataset;
+}
+
+MNIST_Dataset LoadTrainingSet()
+{
+	return LoadMNISTDataset(PATH_TRAINING_SET_LABELS, PATH_TRAINING_SET_IMAGES);
+}
+
+MNIST_Dataset LoadTestSet()
+{
+	return LoadMNISTDataset(PATH_TEST_SET_LABELS, PATH_TEST_SET_IMAGES);
+}
+
+int Main_TestExport(int argc, char** argv)
+{
+	printf("Running Test Export program...\n");
+
+	MNIST_Dataset TrainingData = LoadTrainingSet();
+
+	if (TrainingData.imageCount == 0)
+	{
+		printf("Failed to load training dataset.\n");
 		return 1;
 	}
 
@@ -131,8 +151,17 @@ int Main_TrainAndTest(int argc, char** argv)
 {
 	printf("Running Train and Test program...\n");
 
-	printf("ERROR - UNIMPLEMENTED !\n");
-	return 1;
+	MNIST_Dataset TrainingData = LoadTrainingSet();
+
+	if (TrainingData.imageCount == 0)
+	{
+		printf("Failed to load training dataset.\n");
+		return 1;
+	}
+
+	
+
+	return 0;
 }
 
 int Main_TestModel(int argc, char** argv)

@@ -1,0 +1,18 @@
+# Ignore VS stuff
+
+.vs/
+x64/
+
+*.sln
+*.vcxproj
+*.filters
+*.user
+
+
+# Ignore exported dataset images
+
+*.bmp
+
+# Ignore Dataset itself, download link to be provided in the README.
+
+MNIST-Fi.3D7F410B/

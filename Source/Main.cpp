@@ -4,7 +4,11 @@
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
 
-#include "mnist.h"
+// Dataset include
+#include "mnist_dataset.h"
+
+// AI Models includes
+#include "model_nn.h"
 
 /*
 	MNIST Dataset-based figure reading AI.
@@ -159,8 +163,35 @@ int Main_TrainAndTest(int argc, char** argv)
 		return 1;
 	}
 
-	
+	// Build training model from parameters.
+	// TODO: Allow passing specific parameter to skip the Q&A code.
 
+	printf("Creating new model...\n");
+
+	int input_hiddenLayerCount = 0;
+	int input_hiddenLayerSize = 0;
+
+ENTER_PARAMETERS:
+	printf("Specify number of Hidden Layers (N > 0): "); scanf_s("%d", &input_hiddenLayerCount);
+	printf("Specify number of Neurons per Hidden Layer (N > 0): ");  scanf_s("%d", &input_hiddenLayerSize);
+
+	// Check validity of provided parameters.
+	if (input_hiddenLayerCount > 0 && input_hiddenLayerSize > 0)
+	{
+		goto PARAMETERS_ACCEPTED;
+	}
+
+INVALID_PARAMETERS:
+	printf("Invalid model specifications. Please enter parameters within provided ranges.\n");
+	goto ENTER_PARAMETERS;
+
+PARAMETERS_ACCEPTED:
+	
+	printf("Generating model. Starting weights and biases will be initialized to random values and 0 respectively.\n");
+
+	AIModel_NN newModel = InitializeNewModel(input_hiddenLayerCount, input_hiddenLayerSize, true, true);
+
+	system("pause");
 	return 0;
 }
 

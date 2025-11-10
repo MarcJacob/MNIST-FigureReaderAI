@@ -1,4 +1,4 @@
-#include "mnist.h"
+#include "mnist_dataset.h"
 
 #include <stdio.h>
 #include <string.h>

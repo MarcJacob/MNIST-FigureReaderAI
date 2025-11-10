@@ -4,7 +4,6 @@
 #define MNIST_INCLUDED
 
 #include <stdint.h>
-
 #include <stdlib.h>
 
 struct MNIST_Img

@@ -44,3 +44,10 @@ AIModel_NN NN_InitModel(size_t hiddenLayerCount, size_t hiddenLayerSize, bool bR
 
 // Performs a single instance of Feed Forward using the passed model and image as input on the CPU.
 FeedforwardResult_NN NN_Feedforward_CPU(const AIModel_NN& Model, const MNIST_Img& Image);
+
+// Performs an "epoch" of training over the specified dataset from the start image index to the end image index.
+// The model accumulates "Error" as it attempts to process each image and compares its predictions to the associated label. Once the epoch is ran,
+// Backpropagation is performed to tune the model in order to reduce future error.
+// The entire process runs on the CPU.
+// Returns the accumulated error value over the outputs during the epoch.
+float NN_Train_CPU(AIModel_NN&, const MNIST_Dataset& Dataset, size_t StartImageIndex, size_t EndImageIndex);

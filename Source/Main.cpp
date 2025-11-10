@@ -170,25 +170,30 @@ int Main_TrainAndTest(int argc, char** argv)
 
 	int input_hiddenLayerCount = 0;
 	int input_hiddenLayerSize = 0;
-
-ENTER_PARAMETERS:
-	printf("Specify number of Hidden Layers (N > 0): "); scanf_s("%d", &input_hiddenLayerCount);
-	printf("Specify number of Neurons per Hidden Layer (N > 0): ");  scanf_s("%d", &input_hiddenLayerSize);
-
-	// Check validity of provided parameters.
-	if (input_hiddenLayerCount > 0 && input_hiddenLayerSize > 0)
 	{
+	ENTER_PARAMETERS:
+		printf("Specify number of Hidden Layers (N > 0): ");
+		if (scanf_s("%d", &input_hiddenLayerCount) <= 0 || input_hiddenLayerCount <= 0) goto INVALID_PARAMETERS;
+
+		printf("Specify number of Neurons per Hidden Layer (N > 0): ");
+		if (scanf_s("%d", &input_hiddenLayerSize) <= 0 || input_hiddenLayerSize <= 0) goto INVALID_PARAMETERS;
+
 		goto PARAMETERS_ACCEPTED;
-	}
 
-INVALID_PARAMETERS:
-	printf("Invalid model specifications. Please enter parameters within provided ranges.\n");
-	goto ENTER_PARAMETERS;
-
-PARAMETERS_ACCEPTED:
+	INVALID_PARAMETERS:
+		printf("Invalid model specifications. Please enter parameters within provided ranges.\n");
+		// Flush input stream.
+		{
+			char c;
+			while ((c = getchar()) != '\n' && c != EOF) {}
+		}
+		goto ENTER_PARAMETERS;
+	}PARAMETERS_ACCEPTED: // Exit block when parameters are acceptable.
 	
 	printf("Generating model. Starting weights and biases will be initialized to random values and 0 respectively.\n");
 
+	// Generate the new model with random weights and biases.
+	srand(GetTickCount64());
 	AIModel_NN newModel = NN_InitModel(input_hiddenLayerCount, input_hiddenLayerSize, true, true);
 
 	if (newModel.layers == nullptr)
@@ -197,19 +202,32 @@ PARAMETERS_ACCEPTED:
 		return 1;
 	}
 	
-	printf("Successfully generated model. Performing feedforward on training set.\n");
+	printf("Successfully generated model. Training model...\n");
 
-	// TODO: It MIGHT be helpful to train it first (:
-	for (int imageIndex = 0; imageIndex < TrainingData.imageCount; imageIndex++)
+	static const int IMAGES_PER_EPOCH = 300;
+	
+	const int epochCount = TrainingData.imageCount / IMAGES_PER_EPOCH;
+
+	for (int epochIndex = 0; epochIndex < epochCount; epochIndex++)
 	{
-		printf("FEEDFORWARD IMG %d (Label = %d). Results = \n", imageIndex, TrainingData.labels[imageIndex]);
+		printf("Running Epoch %d...\n", epochIndex);
+		float error = NN_Train_CPU(newModel, TrainingData, epochIndex * IMAGES_PER_EPOCH, (epochIndex + 1) * IMAGES_PER_EPOCH - 1);
+		printf("Epoch completed with error = %f\n", error);
+	}
 
-		FeedforwardResult_NN result = NN_Feedforward_CPU(newModel, TrainingData.images[imageIndex]);
+	// Test the model after training.
+	printf("Training complete.\n");
 
-		printf("[%f, %f, %f, %f, %f, %f, %f, %f, %f, %f]\n", result.values[0], result.values[1], result.values[2], result.values[3], result.values[4],
-			result.values[5], result.values[6], result.values[7], result.values[8], result.values[9]);
+	printf("Ready to test. How many random test images do you want to run ?\n");
+	int testCount;
+	scanf_s("%d", &testCount);
 
-		printf("PREDICTION = %d\n", result.GetHighestIndex());
+	for (int testIndex = 0; testIndex < testCount; testIndex++)
+	{
+		int imageIndex = rand() % TrainingData.imageCount;
+		printf("Test %d: Image %d (Label = %d)\n", testIndex, imageIndex, TrainingData.labels[imageIndex]);
+		FeedforwardResult_NN result = NN_Feedforward_CPU(newModel, TrainingData.images[testIndex]);
+		printf("\tPrediction = %d\n", result.GetHighestIndex());
 	}
 
 	system("pause");

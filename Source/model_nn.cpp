@@ -10,8 +10,8 @@
 #define RAND_BIAS_MIN ((neuron_bias)-2)
 #define RAND_BIAS_MAX ((neuron_bias)2)
 
-#define RAND_WEIGHT_MIN ((neuron_weight)-2)
-#define RAND_WEIGHT_MAX ((neuron_weight)2)
+#define RAND_WEIGHT_MIN ((neuron_weight)-1)
+#define RAND_WEIGHT_MAX ((neuron_weight)1)
 
 neuron_bias GenRandomBias()
 {
@@ -263,6 +263,49 @@ Feedforward_NN InitFeedforwardInstance(const AIModel_NN& Model)
 	return feedforward;
 }
 
+void InitializeInputLayer(Feedforward_NN& Feedforward, const MNIST_Img& InputImage)
+{
+	for (int inputNeuronIndex = 0; inputNeuronIndex < Feedforward.layers[0]->size; inputNeuronIndex++)
+	{
+		Feedforward.layers[0]->values[inputNeuronIndex] = InputImage.pixelValues[inputNeuronIndex] / (neuron_activation)256;
+	}
+}
+
+// Performs feedforward on the passed initialized feedforward structure using the passed model.
+void PerformFeedforward(Feedforward_NN& Feedforward, const AIModel_NN& Model)
+{
+	// For each layer starting at the first hidden layer, calculate the activation value for each neuron and apply a ReLU activation function on it.
+	// If everything so far has been placed in memory correctly, then the read should be nearly perfectly sequential.
+	for (int layerIndex = 1; layerIndex < Model.layerCount; layerIndex++)
+	{
+		for (int neuronIndex = 0; neuronIndex < Model.layers[layerIndex]->size; neuronIndex++)
+		{
+			neuron_activation& activationValue = Feedforward.layers[layerIndex]->values[neuronIndex];
+			for (int sourceNeuronIndex = 0; sourceNeuronIndex < Model.layers[layerIndex - 1]->size; sourceNeuronIndex++)
+			{
+				activationValue += Feedforward.layers[layerIndex - 1]->values[sourceNeuronIndex] // Source value
+					* Model.layers[layerIndex - 1]->weights[neuronIndex * Model.layers[layerIndex - 1]->size + sourceNeuronIndex]; // Source weight
+			}
+
+			activationValue += Model.layers[layerIndex]->biases[neuronIndex]; // Bias
+
+			// ReLU
+			activationValue = activationValue < 0 ? 0 : activationValue;
+		}
+	}
+}
+
+FeedforwardResult_NN ExtractResults(const Feedforward_NN& Feedforward, const AIModel_NN& Model)
+{
+	FeedforwardResult_NN Result = {};
+	for (int outputNeuronIndex = 0; outputNeuronIndex < Feedforward.layers[Model.layerCount - 1]->size; outputNeuronIndex++)
+	{
+		Result.values[outputNeuronIndex] = Feedforward.layers[Model.layerCount - 1]->values[outputNeuronIndex];
+	}
+
+	return Result;
+}
+
 FeedforwardResult_NN NN_Feedforward_CPU(const AIModel_NN& Model, const MNIST_Img& Image)
 {
 	FeedforwardResult_NN Result = {};
@@ -272,26 +315,21 @@ FeedforwardResult_NN NN_Feedforward_CPU(const AIModel_NN& Model, const MNIST_Img
 	static Feedforward_NN feedforward = {};
 	if (&Model != LastModel)
 	{
+		// TODO: Check for compatibility between image and model ?
+
 		feedforward = InitFeedforwardInstance(Model);
 	}
 
 	// Initialize the Model's first layer with the image's pixel values.
-	for (int inputNeuronIndex = 0; inputNeuronIndex < feedforward.layers[0]->size; inputNeuronIndex++)
-	{
-		feedforward.layers[0]->values[inputNeuronIndex] = Image.pixelValues[inputNeuronIndex];
-	}
+	InitializeInputLayer(feedforward, Image);
 
 	// Perform feed forward / forward propagation.
-	// ...
+	PerformFeedforward(feedforward, Model);
 
+	return ExtractResults(feedforward, Model);
+}
 
-
-	// Extract results.
-
-	for (int outputNeuronIndex = 0; outputNeuronIndex < feedforward.layers[Model.layerCount - 1]->size; outputNeuronIndex++)
-	{
-		Result.values[outputNeuronIndex] = feedforward.layers[Model.layerCount - 1]->values[outputNeuronIndex];
-	}
-
-	return Result;
+float NN_Train_CPU(AIModel_NN&, const MNIST_Dataset& Dataset, size_t StartImageIndex, size_t EndImageIndex)
+{
+	return 0.f;
 }

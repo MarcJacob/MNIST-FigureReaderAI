@@ -27,7 +27,7 @@ neuron_weight GenRandomWeight()
 	return randGen * (neuron_weight)0.001;
 }
 
-AIModel_NN InitializeNewModel(size_t hiddenLayerCount, size_t hiddenLayerSize, bool bRandomWeights, bool bRandomBiases)
+AIModel_NN NN_InitModel(size_t hiddenLayerCount, size_t hiddenLayerSize, bool bRandomWeights, bool bRandomBiases)
 {
 	// Check inputs. Return empty model as a signal that input parameters are invalid.
 	if (hiddenLayerCount == 0 || hiddenLayerSize == 0)
@@ -73,7 +73,7 @@ AIModel_NN InitializeNewModel(size_t hiddenLayerCount, size_t hiddenLayerSize, b
 	// for every layer.
 
 	// Allocate sizeof(AIModel_NN::Layer*) * total layer count
-	newModel.Layers = (AIModel_NN::Layer**)modelMemory;											
+	newModel.layers = (AIModel_NN::Layer**)modelMemory;											
 
 	// Offset model memory to beginning of input layer.
 	modelMemory += sizeof(AIModel_NN::Layer**) * newModel.layerCount;
@@ -83,15 +83,15 @@ AIModel_NN InitializeNewModel(size_t hiddenLayerCount, size_t hiddenLayerSize, b
 		size_t inputLayerStructOffset = sizeof(neuron_bias) * INPUT_LAYER_SIZE;
 
 		// Allocate sizeof(AIModel_NN::Layer) after the input layer biases.
-		newModel.Layers[0] = (AIModel_NN::Layer*)(modelMemory + inputLayerStructOffset);		
+		newModel.layers[0] = (AIModel_NN::Layer*)(modelMemory + inputLayerStructOffset);		
 
-		newModel.Layers[0]->size = INPUT_LAYER_SIZE;
+		newModel.layers[0]->size = INPUT_LAYER_SIZE;
 
 		// Allocate sizeof(neuron_bias) * INPUT_LAYER_SIZE for the input layer biases.
-		newModel.Layers[0]->biases = (neuron_bias*)(modelMemory);
+		newModel.layers[0]->biases = (neuron_bias*)(modelMemory);
 
 		// Allocate sizeof(neuron_weight) * Hidden layer size for the input layer weights.
-		newModel.Layers[0]->weights = (neuron_weight*)(modelMemory + inputLayerStructOffset + sizeof(AIModel_NN::Layer));
+		newModel.layers[0]->weights = (neuron_weight*)(modelMemory + inputLayerStructOffset + sizeof(AIModel_NN::Layer));
 	}
 
 	// Offset model memory to beginning of first hidden layer.
@@ -103,12 +103,12 @@ AIModel_NN InitializeNewModel(size_t hiddenLayerCount, size_t hiddenLayerSize, b
 		size_t layerStructOffset = sizeof(neuron_bias) * hiddenLayerSize;
 		
 		// Allocate sizeof(AIModel_NN::Layer) after the layer's biases.
-		newModel.Layers[layerIndex] = (AIModel_NN::Layer*)(modelMemory + layerStructOffset);
+		newModel.layers[layerIndex] = (AIModel_NN::Layer*)(modelMemory + layerStructOffset);
 
-		newModel.Layers[layerIndex]->size = hiddenLayerSize;
+		newModel.layers[layerIndex]->size = hiddenLayerSize;
 
 		// Allocate sizeof(neuron_bias) * Hidden layer size for the layer biases.
-		newModel.Layers[layerIndex]->biases = (neuron_bias*)(modelMemory);
+		newModel.layers[layerIndex]->biases = (neuron_bias*)(modelMemory);
 
 		size_t nextLayerSize = hiddenLayerSize;
 		if (layerIndex == newModel.layerCount - 2)
@@ -117,7 +117,7 @@ AIModel_NN InitializeNewModel(size_t hiddenLayerCount, size_t hiddenLayerSize, b
 		}
 
 		// Allocate sizeof(neuron_weight) * Layer size * Next layer size for the layer weights.
-		newModel.Layers[layerIndex]->weights = (neuron_weight*)(modelMemory + layerStructOffset + sizeof(AIModel_NN::Layer));
+		newModel.layers[layerIndex]->weights = (neuron_weight*)(modelMemory + layerStructOffset + sizeof(AIModel_NN::Layer));
 
 		// Offset model memory.
 		modelMemory += sizeof(neuron_bias) * hiddenLayerSize + sizeof(AIModel_NN::Layer) + sizeof(neuron_weight) * hiddenLayerSize * nextLayerSize;
@@ -128,15 +128,15 @@ AIModel_NN InitializeNewModel(size_t hiddenLayerCount, size_t hiddenLayerSize, b
 		size_t outputLayerStructOffset = sizeof(neuron_bias) * OUTPUT_LAYER_SIZE;
 
 		// Allocate sizeof(AIModel_NN::Layer) after the output layer biases.
-		newModel.Layers[newModel.layerCount - 1] = (AIModel_NN::Layer*)(modelMemory + outputLayerStructOffset);
+		newModel.layers[newModel.layerCount - 1] = (AIModel_NN::Layer*)(modelMemory + outputLayerStructOffset);
 
-		newModel.Layers[newModel.layerCount - 1]->size = OUTPUT_LAYER_SIZE;
+		newModel.layers[newModel.layerCount - 1]->size = OUTPUT_LAYER_SIZE;
 
 		// Allocate sizeof(neuron_bias) * INPUT_LAYER_SIZE for the output layer biases.
-		newModel.Layers[newModel.layerCount - 1]->biases = (neuron_bias*)(modelMemory);
+		newModel.layers[newModel.layerCount - 1]->biases = (neuron_bias*)(modelMemory);
 
 		// No weights !
-		newModel.Layers[newModel.layerCount - 1]->weights = nullptr;
+		newModel.layers[newModel.layerCount - 1]->weights = nullptr;
 	}
 
 	// Offset the AI model memory.
@@ -144,7 +144,8 @@ AIModel_NN InitializeNewModel(size_t hiddenLayerCount, size_t hiddenLayerSize, b
 
 #if _DEBUG
 
-	// Check that we've allocated all of the model's memory.
+	// Check that we've allocated exactly all of the model's memory.
+	
 	size_t allocatedSize = modelMemory - debug_modelMemoryStart;
 	if (allocatedSize != modelMemorySize)
 	{
@@ -160,24 +161,137 @@ AIModel_NN InitializeNewModel(size_t hiddenLayerCount, size_t hiddenLayerSize, b
 	{
 		if (bRandomBiases)
 		{
-			for (uint16_t neuronIndex = 0; neuronIndex < newModel.Layers[layerIndex]->size; neuronIndex++)
+			for (uint16_t neuronIndex = 0; neuronIndex < newModel.layers[layerIndex]->size; neuronIndex++)
 			{
-				newModel.Layers[layerIndex]->biases[neuronIndex] = GenRandomBias();
+				newModel.layers[layerIndex]->biases[neuronIndex] = GenRandomBias();
 			}
 		}
-		if (bRandomWeights && newModel.Layers[layerIndex]->weights != nullptr) // Obviously only randomize the weights up until the second-to-last layer.
+		if (bRandomWeights && newModel.layers[layerIndex]->weights != nullptr) // Obviously only randomize the weights up until the second-to-last layer.
 			// I'd rather have checked the layer index but Intellisense was "warning" me that dereferencing ->weights was dangerous unless I explicitly checked the pointer's
 			// non-nullity. Thanks Microsoft.
 		{
-			for (uint16_t neuronIndex = 0; neuronIndex < newModel.Layers[layerIndex]->size; neuronIndex++)
+			for (uint16_t neuronIndex = 0; neuronIndex < newModel.layers[layerIndex]->size; neuronIndex++)
 			{
-				for (uint16_t targetNeuronIndex = 0; targetNeuronIndex < newModel.Layers[layerIndex + 1]->size; targetNeuronIndex++)
+				for (uint16_t targetNeuronIndex = 0; targetNeuronIndex < newModel.layers[layerIndex + 1]->size; targetNeuronIndex++)
 				{
-					newModel.Layers[layerIndex]->weights[targetNeuronIndex * newModel.Layers[layerIndex]->size + neuronIndex] = GenRandomWeight();
+					newModel.layers[layerIndex]->weights[targetNeuronIndex * newModel.layers[layerIndex]->size + neuronIndex] = GenRandomWeight();
 				}
 			}
 		}
 	}
 
 	return newModel;
+}
+
+// Defines an instance of a feedforward process for a Neural Network model. Contains only the activation values for each neurons.
+// Must be initialized from and paired with a Model to work.
+struct Feedforward_NN
+{
+	struct Layer
+	{
+		uint16_t size;
+		neuron_activation values[1]; // Values array, of variable size, placed contiguously in memory after the structure itself.
+	};
+
+	Layer** layers; // Layer data (and by extension the whole structure) is allocated sequentially in memory with the format [Layer struct][values].
+};
+
+// Builds a feedforward instance for the given model. Allocates the required memory with malloc().
+Feedforward_NN InitFeedforwardInstance(const AIModel_NN& Model)
+{
+	// Check that model is valid
+	if (Model.layerCount < 3) // Input, Output and at least one hidden layer.
+	{
+		return {};
+	}
+
+	Feedforward_NN feedforward = {};
+	
+	// First pass: Get total neuron count from model to determine how much memory is required.
+	size_t neuronCount = 0;
+	for (int layerIndex = 0; layerIndex < Model.layerCount; layerIndex++)
+	{
+		neuronCount += Model.layers[layerIndex]->size;
+	} 
+
+	size_t memorySize = (
+		sizeof(Feedforward_NN::Layer*) * Model.layerCount	// Pointer data for each layer structure, at the beginning of memory.
+		+ sizeof(neuron_activation) * neuronCount 			// Activation values for all neurons.
+		+ sizeof(Feedforward_NN::Layer) * Model.layerCount	// Structure data for each layer.
+	);
+
+	uint8_t* feedforwardMemory = (uint8_t*)malloc(memorySize);
+	if (feedforwardMemory == nullptr)
+	{
+		return {};
+	}
+
+	memset(feedforwardMemory, 0, memorySize);
+
+#if _DEBUG
+
+	uint8_t* debug_feedforwardMemoryStart = feedforwardMemory;
+
+#endif
+	
+	feedforward.layers = (Feedforward_NN::Layer**)feedforwardMemory;
+	feedforwardMemory += sizeof(Feedforward_NN::Layer*) * Model.layerCount;
+
+	// Second pass: Organize each layer, by assigning it the correct pointer value in layers, and giving it the correct size. 
+	for (int layerIndex = 0; layerIndex < Model.layerCount; layerIndex++)
+	{
+		feedforward.layers[layerIndex] = (Feedforward_NN::Layer*)feedforwardMemory; // I don't know how to get rid of this warning. It is mathematically impossible for memorySize to be too small.
+		feedforward.layers[layerIndex]->size = Model.layers[layerIndex]->size;
+
+		// Offset memory pointer.
+		feedforwardMemory += sizeof(Feedforward_NN::Layer) + feedforward.layers[layerIndex]->size * sizeof(neuron_activation);
+	}
+
+#if _DEBUG
+
+	// Check that we've allocated exactly all of the feedforward structure's memory.
+
+	size_t allocatedSize = feedforwardMemory - debug_feedforwardMemoryStart;
+	if (allocatedSize != memorySize)
+	{
+		__debugbreak();
+		return {};
+	}
+
+#endif
+
+	return feedforward;
+}
+
+FeedforwardResult_NN NN_Feedforward_CPU(const AIModel_NN& Model, const MNIST_Img& Image)
+{
+	FeedforwardResult_NN Result = {};
+
+	// Most stupid but functional way of doing caching so we don't re-init the feedforward structure every time.
+	static AIModel_NN* LastModel = nullptr;
+	static Feedforward_NN feedforward = {};
+	if (&Model != LastModel)
+	{
+		feedforward = InitFeedforwardInstance(Model);
+	}
+
+	// Initialize the Model's first layer with the image's pixel values.
+	for (int inputNeuronIndex = 0; inputNeuronIndex < feedforward.layers[0]->size; inputNeuronIndex++)
+	{
+		feedforward.layers[0]->values[inputNeuronIndex] = Image.pixelValues[inputNeuronIndex];
+	}
+
+	// Perform feed forward / forward propagation.
+	// ...
+
+
+
+	// Extract results.
+
+	for (int outputNeuronIndex = 0; outputNeuronIndex < feedforward.layers[Model.layerCount - 1]->size; outputNeuronIndex++)
+	{
+		Result.values[outputNeuronIndex] = feedforward.layers[Model.layerCount - 1]->values[outputNeuronIndex];
+	}
+
+	return Result;
 }

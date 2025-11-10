@@ -10,9 +10,12 @@
 
 typedef float neuron_bias;
 typedef float neuron_weight;
+typedef float neuron_activation;
 
 struct AIModel_NN
 {
+	static constexpr int OUTPUT_VALUE_COUNT = 10; // The NN Model outputs 10 values, one for its confidence in the image being the associated digit.
+
 	struct Layer
 	{
 		uint16_t size; // Number of neurons in this layer.
@@ -21,8 +24,23 @@ struct AIModel_NN
 	};
 
 	uint16_t layerCount;
-	Layer** Layers; // Layer data is allocated sequentially in memory, with the following format: <Previous layer>...[BIASES_ARRAY][LAYER_STRUCT][WEIGHTS_ARRAY]...<Next Layer>
+	Layer** layers; // Layer data is allocated sequentially in memory, with the following format: <Previous layer>...[BIASES_ARRAY][LAYER_STRUCT][WEIGHTS_ARRAY]...<Next Layer>
+};
+
+struct FeedforwardResult_NN
+{
+	neuron_activation values[AIModel_NN::OUTPUT_VALUE_COUNT];
+	int GetHighestIndex() const { 
+		int maxIndex = 0; 
+		for (int i = 0; i < AIModel_NN::OUTPUT_VALUE_COUNT; i++) 
+			if (values[i] > values[maxIndex]) 
+				maxIndex = i; 
+		return maxIndex;
+	}
 };
 
 // Initializes a new NN model. Necessary heap memory is allocated using malloc().
-AIModel_NN InitializeNewModel(size_t hiddenLayerCount, size_t hiddenLayerSize, bool bRandomWeights = true, bool bRandomBiases = false);
+AIModel_NN NN_InitModel(size_t hiddenLayerCount, size_t hiddenLayerSize, bool bRandomWeights = true, bool bRandomBiases = false);
+
+// Performs a single instance of Feed Forward using the passed model and image as input on the CPU.
+FeedforwardResult_NN NN_Feedforward_CPU(const AIModel_NN& Model, const MNIST_Img& Image);

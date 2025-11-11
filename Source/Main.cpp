@@ -230,6 +230,9 @@ int Main_TrainAndTest(int argc, char** argv)
 		printf("\tPrediction = %d\n", result.GetHighestIndex());
 	}
 
+	// Free the model. TODO: Export the model to a file, preferably in a readable format for backward compatibility.
+	NN_FreeModel(newModel);
+
 	system("pause");
 	return 0;
 }

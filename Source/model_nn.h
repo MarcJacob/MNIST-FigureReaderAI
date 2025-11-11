@@ -42,6 +42,9 @@ struct FeedforwardResult_NN
 // Initializes a new NN model. Necessary heap memory is allocated using malloc().
 AIModel_NN NN_InitModel(size_t hiddenLayerCount, size_t hiddenLayerSize, bool bRandomWeights = true, bool bRandomBiases = false);
 
+// Frees the memory taken up by a Neural Network model.
+void NN_FreeModel(AIModel_NN& Model);
+
 // Performs a single instance of Feed Forward using the passed model and image as input on the CPU.
 FeedforwardResult_NN NN_Feedforward_CPU(const AIModel_NN& Model, const MNIST_Img& Image);
 

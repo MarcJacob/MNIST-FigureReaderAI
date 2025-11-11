@@ -192,6 +192,12 @@ int Main_TrainAndTest(int argc, char** argv)
 	
 	printf("Generating model. Starting weights and biases will be initialized to random values and 0 respectively.\n");
 
+	if (input_hiddenLayerCount * input_hiddenLayerSize > 10000)
+	{
+		printf("WARNING: You've chosen to generate and train a relatively large model (Total %d Hidden layer Neurons). Currently only CPU-based training and running is implemented, so expect a long training time.\n",
+			input_hiddenLayerCount * input_hiddenLayerSize);
+	}
+
 	// Generate the new model with random weights and biases.
 	srand(GetTickCount64());
 	AIModel_NN newModel = NN_InitModel(input_hiddenLayerCount, input_hiddenLayerSize, true, true);
@@ -202,15 +208,15 @@ int Main_TrainAndTest(int argc, char** argv)
 		return 1;
 	}
 	
-	printf("Successfully generated model. Training model...\n");
+	printf("Successfully generated model. Memory usage = %dKB.\n Training model...\n", newModel.modelMemorySize / 1024);
 
 	static const int IMAGES_PER_EPOCH = 300;
 	
-	const int epochCount = TrainingData.imageCount / IMAGES_PER_EPOCH;
+	static const int EPOCH_COUNT = 10;
 
-	for (int epochIndex = 0; epochIndex < epochCount; epochIndex++)
+	for (int epochIndex = 0; epochIndex < EPOCH_COUNT; epochIndex++)
 	{
-		printf("Running Epoch %d...\n", epochIndex);
+		printf("Running Epoch %d... (Using %d datapoints)\n", epochIndex, IMAGES_PER_EPOCH);
 		float error = NN_Train_CPU(newModel, TrainingData, epochIndex * IMAGES_PER_EPOCH, (epochIndex + 1) * IMAGES_PER_EPOCH - 1);
 		printf("Epoch completed with error = %f\n", error);
 	}
@@ -227,6 +233,12 @@ int Main_TrainAndTest(int argc, char** argv)
 		int imageIndex = rand() % TrainingData.imageCount;
 		printf("Test %d: Image %d (Label = %d)\n", testIndex, imageIndex, TrainingData.labels[imageIndex]);
 		FeedforwardResult_NN result = NN_Feedforward_CPU(newModel, TrainingData.images[testIndex]);
+
+		// Print the results.
+		printf("Results = [%f, %f, %f, %f, %f, %f, %f, %f, %f, %f]\n",
+			result.values[0], result.values[1], result.values[2], result.values[3], result.values[4], 
+			result.values[5], result.values[6], result.values[7], result.values[8], result.values[9]);
+
 		printf("\tPrediction = %d\n", result.GetHighestIndex());
 	}
 

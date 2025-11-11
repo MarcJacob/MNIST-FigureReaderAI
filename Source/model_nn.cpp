@@ -12,8 +12,9 @@
 #define RAND_BIAS_MIN ((neuron_bias)-2)
 #define RAND_BIAS_MAX ((neuron_bias)2)
 
-#define RAND_WEIGHT_MIN ((neuron_weight)-1)
-#define RAND_WEIGHT_MAX ((neuron_weight)1)
+// Random weight value definitions. They need to be pretty low to avoid dealing with extremely large values during Feed Forward which can break the model.
+#define RAND_WEIGHT_MIN ((neuron_weight)-0.1)
+#define RAND_WEIGHT_MAX ((neuron_weight)0.1)
 
 neuron_bias GenRandomBias()
 {
@@ -57,7 +58,8 @@ AIModel_NN NN_InitModel(size_t hiddenLayerCount, size_t hiddenLayerSize, bool bR
 	);
 
 	uint8_t* modelMemory = (uint8_t*)malloc(modelMemorySize);
-	
+	newModel.modelMemorySize = modelMemorySize;
+
 #if _DEBUG
 	uint8_t* debug_modelMemoryStart = modelMemory;
 #endif
@@ -187,6 +189,7 @@ AIModel_NN NN_InitModel(size_t hiddenLayerCount, size_t hiddenLayerSize, bool bR
 
 void NN_FreeModel(AIModel_NN& Model)
 {
+	\
 	// The Model's entire memory is tied to a single allocation at the location of its layers pointer.
 	free(Model.layers);
 }
@@ -325,16 +328,29 @@ FeedforwardResult_NN ExtractResults(const Feedforward_NN& Feedforward, const AIM
 
 	FeedforwardResult_NN Result = {};
 
+	// Find maximum for first normalization pass.
+	// It turns out this is necessary to prevent very high output values from breaking the algorithm.
+	neuron_activation maxOutput = Feedforward.layers[Model.layerCount - 1]->values[0];
+	for (int outputNeuronIndex = 1; outputNeuronIndex < OUTPUT_LAYER_SIZE; outputNeuronIndex++)
+	{
+		neuron_activation output = Feedforward.layers[Model.layerCount - 1]->values[outputNeuronIndex];
+		if (output > maxOutput)
+		{
+			maxOutput = output;
+		}
+	}
+
 	// Compute transformed values and their sum.
 	double_t transformedSum = 0;
-	for (int outputNeuronIndex = 0; outputNeuronIndex < Feedforward.layers[Model.layerCount - 1]->size; outputNeuronIndex++)
+	for (int outputNeuronIndex = 0; outputNeuronIndex < OUTPUT_LAYER_SIZE; outputNeuronIndex++)
 	{
-		Result.values[outputNeuronIndex] = exp(Feedforward.layers[Model.layerCount - 1]->values[outputNeuronIndex]); // Raise exponential to the value of the output.
+		// Raise exponential to the value of the output normalized by maximum for greater number (and system) stability.
+		Result.values[outputNeuronIndex] = exp(Feedforward.layers[Model.layerCount - 1]->values[outputNeuronIndex] / maxOutput);
 		transformedSum += Result.values[outputNeuronIndex];
 	}
 	
 	// Compute normalized transformed values.
-	for (int outputNeuronIndex = 0; outputNeuronIndex < Feedforward.layers[Model.layerCount - 1]->size; outputNeuronIndex++)
+	for (int outputNeuronIndex = 0; outputNeuronIndex < OUTPUT_LAYER_SIZE; outputNeuronIndex++)
 	{
 		Result.values[outputNeuronIndex] /= transformedSum;
 	}

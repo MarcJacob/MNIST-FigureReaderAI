@@ -24,6 +24,7 @@ struct AIModel_NN
 	};
 
 	uint16_t layerCount;
+	size_t modelMemorySize; // Room this model takes in memory, in bytes.
 	Layer** layers; // Layer data is allocated sequentially in memory, with the following format: <Previous layer>...[BIASES_ARRAY][LAYER_STRUCT][WEIGHTS_ARRAY]...<Next Layer>
 };
 

@@ -130,7 +130,7 @@ int Main_TestExport(int argc, char** argv)
 	static const int EXPORT_IMG_COUNT = 5;
 	printf("Exporting %d random training images as bitmaps.\n", EXPORT_IMG_COUNT);
 
-	srand(GetTickCount64());
+	srand((int)GetTickCount64());
 
 	for (int exportIndex = 0; exportIndex < EXPORT_IMG_COUNT; exportIndex++)
 	{
@@ -160,6 +160,7 @@ int Main_TrainAndTest(int argc, char** argv)
 	if (TrainingData.imageCount == 0)
 	{
 		printf("Failed to load training dataset.\n");
+		system("pause");
 		return 1;
 	}
 
@@ -172,11 +173,14 @@ int Main_TrainAndTest(int argc, char** argv)
 	int input_hiddenLayerSize = 0;
 	{
 	ENTER_PARAMETERS:
-		printf("Specify number of Hidden Layers (N > 0): ");
-		if (scanf_s("%d", &input_hiddenLayerCount) <= 0 || input_hiddenLayerCount <= 0) goto INVALID_PARAMETERS;
 
-		printf("Specify number of Neurons per Hidden Layer (N > 0): ");
-		if (scanf_s("%d", &input_hiddenLayerSize) <= 0 || input_hiddenLayerSize <= 0) goto INVALID_PARAMETERS;
+		const uint16_t maxValue = (uint16_t)(~0);
+
+		printf("Specify number of Hidden Layers (0 < N < %d): ", maxValue);
+		if (scanf_s("%d", &input_hiddenLayerCount) <= 0 || input_hiddenLayerCount <= 0 || input_hiddenLayerCount >= maxValue) goto INVALID_PARAMETERS;
+
+		printf("Specify number of Neurons per Hidden Layer (0 < %d): ", maxValue);
+		if (scanf_s("%d", &input_hiddenLayerSize) <= 0 || input_hiddenLayerSize <= 0 || input_hiddenLayerSize >= maxValue) goto INVALID_PARAMETERS;
 
 		goto PARAMETERS_ACCEPTED;
 
@@ -199,35 +203,45 @@ int Main_TrainAndTest(int argc, char** argv)
 	}
 
 	// Generate the new model with random weights and biases.
-	srand(GetTickCount64());
+	srand((int)GetTickCount64());
 	AIModel_NN newModel = NN_InitModel(input_hiddenLayerCount, input_hiddenLayerSize, true, true);
 
 	if (newModel.layers == nullptr)
 	{
 		printf("Model generation failed. Aborting.\n");
+		system("pause");
 		return 1;
 	}
 	
-	printf("Successfully generated model. Memory usage = %dKB.\n Training model...\n", newModel.modelMemorySize / 1024);
+	printf("Successfully generated model. Memory usage = %uKB.\n Training model...\n", int(newModel.modelMemorySize / 1024)); // Int conversion here is fine since it's in Kilobytes. I don't expect we'll be reaching into the Terrabytes of model size.
 
 	static const int IMAGES_PER_EPOCH = 300;
-	
 	static const int EPOCH_COUNT = 10;
 
 	for (int epochIndex = 0; epochIndex < EPOCH_COUNT; epochIndex++)
 	{
 		printf("Running Epoch %d... (Using %d datapoints)\n", epochIndex, IMAGES_PER_EPOCH);
-		float error = NN_Train_CPU(newModel, TrainingData, epochIndex * IMAGES_PER_EPOCH, (epochIndex + 1) * IMAGES_PER_EPOCH - 1);
+		float error = NN_Train_CPU(newModel, TrainingData, epochIndex * IMAGES_PER_EPOCH, (epochIndex + 1) * IMAGES_PER_EPOCH);
+
+		if (error < 0)
+		{
+			printf("Error when running training epoch. Aborting.\n");
+			system("pause");
+			return 1;
+		}
+
 		printf("Epoch completed with error = %f\n", error);
 	}
 
-	// Test the model after training.
+	
 	printf("Training complete.\n");
 
+	// Test the model after training.
+	// TODO: Use Test dataset instead, and probably just export this to a specific test function that can also be ran after loading a model from drive.
+	
 	printf("Ready to test. How many random test images do you want to run ?\n");
 	int testCount;
 	scanf_s("%d", &testCount);
-
 	for (int testIndex = 0; testIndex < testCount; testIndex++)
 	{
 		int imageIndex = rand() % TrainingData.imageCount;

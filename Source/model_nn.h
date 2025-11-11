@@ -41,7 +41,7 @@ struct FeedforwardResult_NN
 };
 
 // Initializes a new NN model. Necessary heap memory is allocated using malloc().
-AIModel_NN NN_InitModel(size_t hiddenLayerCount, size_t hiddenLayerSize, bool bRandomWeights = true, bool bRandomBiases = false);
+AIModel_NN NN_InitModel(uint16_t hiddenLayerCount, uint16_t hiddenLayerSize, bool bRandomWeights = true, bool bRandomBiases = false);
 
 // Frees the memory taken up by a Neural Network model.
 void NN_FreeModel(AIModel_NN& Model);

@@ -405,7 +405,7 @@ FeedforwardResult_NN NN_Feedforward_CPU(const AIModel_NN& Model, const MNIST_Img
 // Returns the total Error "processed" for this iteration.
 float PerformBackpropagation(AIModel_NN& Model, const Feedforward_NN& Feedforward, const MNIST_Img& InputImage, const int8_t& InputLabel, size_t IterationIndex)
 {
-	static float constexpr LEARNING_RATE = 0.0001f;
+	static float constexpr LEARNING_RATE = 0.000001f;
 
 	// Check that label value is valid.
 	if (InputLabel > 9) return -1.f;
@@ -472,29 +472,31 @@ float PerformBackpropagation(AIModel_NN& Model, const Feedforward_NN& Feedforwar
 			if (layerIndex == Model.layerCount - 1)
 			totalCost += cost;
 
+			// GRADIENT DESCENT
+			// We currently use the "Leaky ReLU" activation function which has a derivative defined at 1 when x >= 0, and 0.1 when x < 0.
+
+			float GRADIENT_BASE = (currentValue < 0 ? 0.1f : 1.f);
+
 			// Begin gradient descent by adjusting each inbound weight depending on their importance (which depends solely on the activation value of the associated previous layer
 			// neuron). At the same time, determine a desired value for that neuron.
-			if (cost > 0.0005f)
+			for (int previousLayerNeuronIndex = 0; previousLayerNeuronIndex < Model.layers[layerIndex - 1]->size; previousLayerNeuronIndex++)
 			{
-				for (int previousLayerNeuronIndex = 0; previousLayerNeuronIndex < Model.layers[layerIndex - 1]->size; previousLayerNeuronIndex++)
-				{
-					neuron_weight& inboundWeight = Model.layers[layerIndex - 1]->weights[neuronIndex * Model.layers[layerIndex - 1]->size + previousLayerNeuronIndex];
-					const neuron_activation& inboundValue = Feedforward.layers[layerIndex - 1]->values[previousLayerNeuronIndex];
+				neuron_weight& inboundWeight = Model.layers[layerIndex - 1]->weights[neuronIndex * Model.layers[layerIndex - 1]->size + previousLayerNeuronIndex];
+				const neuron_activation& inboundValue = Feedforward.layers[layerIndex - 1]->values[previousLayerNeuronIndex];
 
-					// Determine gradient for inbound weight.
-					float costDeltaByWeight = (currentValue < 0 ? inboundValue * 0.1f : inboundValue) * 2 * (currentValue - currentDesired);
-					inboundWeight += LEARNING_RATE * -costDeltaByWeight;
+				// Determine gradient for inbound weight.
+				float costDeltaByWeight = inboundValue * 2 * (currentValue - currentDesired) * GRADIENT_BASE;
+				inboundWeight += LEARNING_RATE * -costDeltaByWeight;
 
-					// Determine gradient for previous layer neuron.
-					float costDeltaByInboundValue = (currentValue < 0 ? inboundWeight * 0.1f: inboundWeight) * 2 * (currentValue - currentDesired);
-					previousLayerDesiredValues[previousLayerNeuronIndex] += LEARNING_RATE * -costDeltaByInboundValue;
-				}
-
-				neuron_bias& currentBias = Model.layers[layerIndex]->biases[neuronIndex];
-
-				float costDeltaByBias = 2 * (currentValue - currentDesired);
-				currentBias += LEARNING_RATE * -costDeltaByBias;
+				// Determine gradient for previous layer neuron.
+				float costDeltaByInboundValue = inboundWeight * 2 * (currentValue - currentDesired) * GRADIENT_BASE;
+				previousLayerDesiredValues[previousLayerNeuronIndex] += LEARNING_RATE * -costDeltaByInboundValue;
 			}
+
+			neuron_bias& currentBias = Model.layers[layerIndex]->biases[neuronIndex];
+
+			float costDeltaByBias = 2 * (currentValue - currentDesired) * GRADIENT_BASE;
+			currentBias += LEARNING_RATE * -costDeltaByBias;
 		}
 
 		// Post Process the Previous Layer Desired Values buffer - it for now contains the sum of the relative errors. Switch it back to desired values by offsetting it

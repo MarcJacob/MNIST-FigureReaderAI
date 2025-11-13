@@ -215,24 +215,24 @@ int Main_TrainAndTest(int argc, char** argv)
 	
 	printf("Successfully generated model. Memory usage = %uKB.\n Training model...\n", int(newModel.modelMemorySize / 1024)); // Int conversion here is fine since it's in Kilobytes. I don't expect we'll be reaching into the Terrabytes of model size.
 
-	static const int IMAGES_PER_EPOCH = 5000;
+	static const int IMAGES_PER_EPOCH = 3000;
 	static const int EPOCH_COUNT = 200;
 
+	printf("Running %d Epochs, each using %d datapoints.\n", EPOCH_COUNT, IMAGES_PER_EPOCH);
 	for (int epochIndex = 0; epochIndex < EPOCH_COUNT; epochIndex++)
 	{
-		printf("Running Epoch %d... (Using %d datapoints)\n", epochIndex, IMAGES_PER_EPOCH);
 		int startImageIndex = epochIndex * IMAGES_PER_EPOCH % TrainingData.imageCount;
 		int endImageIndex = (epochIndex + 1) * IMAGES_PER_EPOCH % TrainingData.imageCount;
-		float error = NN_Train_CPU(newModel, TrainingData, startImageIndex, endImageIndex);
+		float cost = NN_Train_CPU(newModel, TrainingData, startImageIndex, endImageIndex);
 
-		if (error < 0)
+		if (cost < 0)
 		{
 			printf("Error when running training epoch. Aborting.\n");
 			system("pause");
 			return 1;
 		}
 
-		printf("Epoch completed with error average = %f\n", error);
+		printf("Epoch %d completed with cost average = %f\n", epochIndex, cost);
 	}
 
 	

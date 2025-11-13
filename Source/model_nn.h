@@ -11,6 +11,7 @@
 typedef float neuron_bias;
 typedef float neuron_weight;
 typedef float neuron_activation;
+typedef double model_cost;
 
 struct AIModel_NN
 {

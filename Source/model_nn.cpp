@@ -11,26 +11,18 @@
 #define INPUT_LAYER_SIZE (MNIST_Img::IMG_WIDTH * MNIST_Img::IMG_HEIGHT)
 #define OUTPUT_LAYER_SIZE (AIModel_NN::OUTPUT_VALUE_COUNT)
 
-#define RAND_BIAS_MIN ((neuron_bias)-0.2)
-#define RAND_BIAS_MAX ((neuron_bias)0.2)
-
-// Random weight value definitions. They need to be pretty low to avoid dealing with extremely large values during Feed Forward which can break the model.
-#define RAND_WEIGHT_MIN ((neuron_weight)-0.2)
-#define RAND_WEIGHT_MAX ((neuron_weight)0.2)
-
-neuron_bias GenRandomBias()
+neuron_bias GenRandomBias(neuron_bias Min, neuron_bias Max)
 {
-	if (RAND_BIAS_MAX - RAND_BIAS_MIN == 0) return 0;
 	// Let's keep it really simple. Quantize whatever rand() returns as a thousandth and use that.
-	int32_t randGen = rand() % (int32_t)((RAND_BIAS_MAX - RAND_BIAS_MIN) * 1000);
-	return (randGen * (neuron_bias)0.001) + RAND_BIAS_MIN;
+	int32_t randGen = rand() % (int32_t)((Max - Min) * 1000);
+	return (randGen * (neuron_bias)0.001) + Min;
 }
 
-neuron_weight GenRandomWeight()
+neuron_weight GenRandomWeight(neuron_weight Min, neuron_weight Max)
 {
 	// Let's keep it really simple. Quantize whatever rand() returns as a thousandth and use that.
-	int32_t randGen = rand() % (int32_t)((RAND_WEIGHT_MAX - RAND_WEIGHT_MIN) * 1000);
-	return (randGen * (neuron_weight)0.001) + RAND_WEIGHT_MIN;
+	int32_t randGen = rand() % (int32_t)((Max - Min) * 1000);
+	return (randGen * (neuron_weight)0.001) + Min;
 }
 
 AIModel_NN NN_InitModel(uint16_t hiddenLayerCount, uint16_t hiddenLayerSize, bool bRandomWeights, bool bRandomBiases)
@@ -170,7 +162,7 @@ AIModel_NN NN_InitModel(uint16_t hiddenLayerCount, uint16_t hiddenLayerSize, boo
 		{
 			for (uint16_t neuronIndex = 0; neuronIndex < newModel.layers[layerIndex]->size; neuronIndex++)
 			{
-				newModel.layers[layerIndex]->biases[neuronIndex] = GenRandomBias();
+				newModel.layers[layerIndex]->biases[neuronIndex] = GenRandomBias(-0.2f, 0.2f);
 			}
 		}
 		if (bRandomWeights && newModel.layers[layerIndex]->weights != nullptr) // Obviously only randomize the weights up until the second-to-last layer.
@@ -181,7 +173,7 @@ AIModel_NN NN_InitModel(uint16_t hiddenLayerCount, uint16_t hiddenLayerSize, boo
 			{
 				for (uint16_t targetNeuronIndex = 0; targetNeuronIndex < newModel.layers[layerIndex + 1]->size; targetNeuronIndex++)
 				{
-					newModel.layers[layerIndex]->weights[targetNeuronIndex * newModel.layers[layerIndex]->size + neuronIndex] = GenRandomWeight();
+					newModel.layers[layerIndex]->weights[targetNeuronIndex * newModel.layers[layerIndex]->size + neuronIndex] = GenRandomWeight(-4.f / newModel.layers[layerIndex]->size, 4.f / newModel.layers[layerIndex]->size);
 				}
 			}
 		}
@@ -196,9 +188,44 @@ void NN_FreeModel(AIModel_NN& Model)
 	free(Model.layers);
 }
 
-neuron_activation Activation(neuron_activation inActivation)
+// MODEL CORE FUNCTIONS
+
+// Activation Function : "Leaky" ReLU with slight (not flat) gradient below 0.
+inline neuron_activation Activation(neuron_activation InActivation)
 {
-	return inActivation < 0 ? __max(-10000, inActivation * 0.1f) : __min(10000, inActivation);
+	return InActivation < 0 ? __max(-10000, InActivation * 0.1f) : __min(10000, InActivation);
+}
+
+// Activation Function Derivative: "Leaky" ReLU with 0.1 gradient below 0 and 1 at and above.
+inline neuron_activation d_Activation(neuron_activation InActivation)
+{
+	return InActivation < 0 ? 0.1 : 1;
+}
+
+// Returns the cost of a neuron's activation compared to what is desired.
+inline model_cost Cost(neuron_activation Activation, neuron_activation Desired)
+{
+	return (Activation - Desired) * (Activation - Desired);
+}
+
+// Returns the cost gradient of a source neuron's weight.
+inline model_cost GetWeightCostGradient(neuron_activation SourceNeuronActivation, neuron_activation TargetNeuronActivation, neuron_activation DesiredActivation)
+{
+	// Note: Using TargetNeuronActivation in d_Activation here isn't quite correct because we need the neuron value PRE activation function, but since we are using ReLU it should work.
+	return SourceNeuronActivation * 2 * (TargetNeuronActivation - DesiredActivation) * d_Activation(TargetNeuronActivation);
+}
+
+// Returns the cost gradient of a neuron's bias.
+inline model_cost GetBiasCostGradient(neuron_activation TargetNeuronActivation, neuron_activation DesiredActivation)
+{
+	return 2 * (TargetNeuronActivation - DesiredActivation) * d_Activation(TargetNeuronActivation);
+}
+
+// Returns the cost gradient of a source neuron's value from the perspective of a single target neuron. Take care to average together all the values for all
+// target neurons on the target layer for each source neuron !
+inline model_cost GetSinglePathNeuronCostGradient(neuron_weight SourceWeight, neuron_activation TargetNeuronActivation, neuron_activation DesiredActivation)
+{
+	return SourceWeight * 2 * (TargetNeuronActivation - DesiredActivation) * d_Activation(TargetNeuronActivation);
 }
 
 // Defines an instance of a feedforward process for a Neural Network model. Contains only the activation values for each neurons.
@@ -516,7 +543,7 @@ void FreeLearningInstance(Learning_NN& Learn)
 // Returns the total Error "processed" for this iteration.
 float PerformBackpropagation(const AIModel_NN& Model, const Feedforward_NN& Feedforward, const MNIST_Img& InputImage, const int8_t& InputLabel, Learning_NN& Learning, size_t IterationIndex)
 {
-	static double constexpr LEARNING_RATE = 0.0001;
+	static double constexpr LEARNING_RATE = 0.1;
 
 	// Check that label value is valid.
 	if (InputLabel > 9) return -1.f;
@@ -530,7 +557,7 @@ float PerformBackpropagation(const AIModel_NN& Model, const Feedforward_NN& Feed
 	// Use a double-buffered system for holding Desired Values for the current and previous layer while backpropagating.
 	// They are as large as the largest layer in the model, meaning no bound checking or extra allocations are ever required for them in the whole backpropagation process.
 	neuron_activation* currentDesiredValues = nullptr;
-	neuron_activation* previousLayerDesiredValues = nullptr;
+	neuron_activation* previousLayerValueGradients = nullptr;
 	size_t desiredValuesBufferSize;
 	
 	// Use the largest layer size in the model to determine the allocation size of the buffers, with the exception of the input buffer
@@ -552,120 +579,98 @@ float PerformBackpropagation(const AIModel_NN& Model, const Feedforward_NN& Feed
 
 	desiredValuesBufferSize = largestLayerSize * sizeof(neuron_activation);
 	currentDesiredValues = (neuron_activation*)malloc(desiredValuesBufferSize);
-	previousLayerDesiredValues = (neuron_activation*)malloc(desiredValuesBufferSize);
+	previousLayerValueGradients = (neuron_activation*)malloc(desiredValuesBufferSize);
 
-	if (currentDesiredValues == nullptr || previousLayerDesiredValues == nullptr)
+	if (currentDesiredValues == nullptr || previousLayerValueGradients == nullptr)
 	{
 		return -1.f;
 	}
 
 	memset(currentDesiredValues, 0, desiredValuesBufferSize);
-	memset(previousLayerDesiredValues, 0, desiredValuesBufferSize);
+	memset(previousLayerValueGradients, 0, desiredValuesBufferSize);
 	
 
 	// Initialize the output layer desired values according to the label.
 
 	currentDesiredValues[InputLabel] = 1;
 
-	double totalCost = 0.f;
+	// Calculate total output cost. The goal of Backpropagation is to lower this value.
+	double totalOutputCost = 0.f;
 
+	// Add to the total error if on output layer.
+	for (int outputNeuronIndex = 0; outputNeuronIndex < OUTPUT_LAYER_SIZE; outputNeuronIndex++)
+	{
+		neuron_activation output = Feedforward.layers[Model.layerCount - 1]->values[outputNeuronIndex];
+		double cost = Cost(output, currentDesiredValues[outputNeuronIndex]);
+		totalOutputCost += cost;
+	}
+
+	// Backpropagation
 	// Work our way backwards starting from the output layer.
 	for (int layerIndex = Model.layerCount - 1; layerIndex > 0; layerIndex--)
 	{
-		int learningLayerIndex = layerIndex - 1;
+		// Learning Layer in which to record the desired changes in weights and biases.
+		Learning_NN::Layer& learningLayer = *Learning.layers[layerIndex - 1];
 
 		// For each neuron in the layer, determine the error between the corresponding FeedforwardResult value and desired value.
 		// Then, determine a change in inbound weight values and bias to reduce this error.
-		// Once the weights and the bias are updated, determine the relative error for all inbound neurons and add it to their place in the previous layer desired values.
+		// Determine the relative error for all inbound neurons and add it to their place in the previous layer desired values array.
 		// Those sums will then be converted back to an actual desired value as a post processing step using their actual value during the feed forward phase, saving memory.
 		for (int neuronIndex = 0; neuronIndex < Model.layers[layerIndex]->size; neuronIndex++)
 		{
-			neuron_activation currentValue = Feedforward.layers[layerIndex]->values[neuronIndex];
-			neuron_activation currentDesired = currentDesiredValues[neuronIndex];
-			neuron_activation relativeError = currentValue - currentDesired;
-			
-			// To bring all errors into the positive space (so they don't cancel one another out), square them.
-			neuron_activation cost = relativeError * relativeError;
+			neuron_activation outputActivation = Feedforward.layers[layerIndex]->values[neuronIndex];
+			neuron_activation outputCost = Cost(outputActivation, currentDesiredValues[neuronIndex]);
 
-			// Add to the total error if on output layer.
-			if (layerIndex == Model.layerCount - 1)
-			totalCost += cost;
+			// Bias gradient descent
+			learningLayer.biasChanges[neuronIndex] += LEARNING_RATE * -GetBiasCostGradient(outputActivation, outputCost);
 
-			// GRADIENT DESCENT
-			// We currently use the "Leaky ReLU" activation function which has a derivative defined at 1 when x >= 0, and 0.1 when x < 0.
-
-			float GRADIENT_BASE = (currentValue < 0 ? 0.1f : 1.f);
-
-			// Begin gradient descent by adjusting each inbound weight depending on their importance (which depends solely on the activation value of the associated previous layer
-			// neuron). At the same time, determine a desired value for that neuron.
-			for (int previousLayerNeuronIndex = 0; previousLayerNeuronIndex < Model.layers[layerIndex - 1]->size; previousLayerNeuronIndex++)
+			for (int sourceNeuronIndex = 0; sourceNeuronIndex < Model.layers[layerIndex - 1]->size; sourceNeuronIndex++)
 			{
-				neuron_weight& inboundWeight = Model.layers[layerIndex - 1]->weights[neuronIndex * Model.layers[layerIndex - 1]->size + previousLayerNeuronIndex];
-				const neuron_activation& inboundValue = Feedforward.layers[layerIndex - 1]->values[previousLayerNeuronIndex];
-
-#if 1 // WEIGHT LEARNING
-
-				// Determine gradient for inbound weight and add it to the requested change for this specific weight in the model.
-				float costDeltaByWeight = inboundValue * 2 * (currentValue - currentDesired) * GRADIENT_BASE;
-				if (costDeltaByWeight != 0.f)
-				{
-					Learning.layers[learningLayerIndex]->weightChanges[
-						neuronIndex * Learning.layers[learningLayerIndex]->previousLayerSize // Target neuron
-							+ previousLayerNeuronIndex]  // Source neuron
-						+= LEARNING_RATE * cost / -costDeltaByWeight; // Add negative of cost delta multiplied by Learning Rate.
-				}
-#endif
-
-#if 1 // DESIRED VALUE BACK PROPAGATION
-
-				// Determine gradient for previous layer neuron.
-				// This does not need to be added to the Learning structure since we only care about weight and bias changes.
-				// The desired value for the previous layers are aggregated together as a relative error and will determine
-				// the weight and bias changes for that layer, and so on recursively until reaching the first hidden layer.
-				float costDeltaByInboundValue = inboundWeight * 2 * (currentValue - currentDesired) * GRADIENT_BASE;
-				if (layerIndex > 1 && costDeltaByInboundValue != 0)
-				{
-					previousLayerDesiredValues[previousLayerNeuronIndex] += LEARNING_RATE * cost / -costDeltaByInboundValue;
-				}
-#endif
+				// Weight gradient descent
+				neuron_activation sourceActivation = Feedforward.layers[layerIndex - 1]->values[sourceNeuronIndex];
+				neuron_weight weightChange = LEARNING_RATE * -GetWeightCostGradient(sourceActivation, outputActivation, currentDesiredValues[neuronIndex]);
+				learningLayer.weightChanges[neuronIndex * Model.layers[layerIndex - 1]->size + sourceNeuronIndex]
+					+= weightChange;
 			}
 
-			neuron_bias& currentBias = Model.layers[layerIndex]->biases[neuronIndex];
-
-#if 1 // BIAS LEARNING
-			// Determine gradient for bias.
-			float costDeltaByBias = 2 * (currentValue - currentDesired) * GRADIENT_BASE;
-			if (costDeltaByBias != 0.f)
+			// Determine cost gradient for the overall activation value of each source neuron. Add them into Previous Layer Desired Value Gradients where they'll be converted
+			// back to a Desired Value once the current layer has completed back propagation.
+			if (layerIndex > 1)
+			for (int sourceNeuronIndex = 0; sourceNeuronIndex < Model.layers[layerIndex - 1]->size; sourceNeuronIndex++)
 			{
-				Learning.layers[learningLayerIndex]->biasChanges[neuronIndex] += LEARNING_RATE * cost / -costDeltaByBias; // Set to negative of cost delta multiplied by Learning Rate.
+				neuron_weight sourceWeight = Model.layers[layerIndex - 1]->weights[neuronIndex * Model.layers[layerIndex - 1]->size + sourceNeuronIndex];
+				previousLayerValueGradients[sourceNeuronIndex] += LEARNING_RATE * -GetSinglePathNeuronCostGradient(sourceWeight, outputActivation, currentDesiredValues[neuronIndex]);
 			}
-#endif
 		}
 
-		// Post Process the Previous Layer Desired Values buffer - it for now contains the sum of the relative errors. Switch it back to desired values by offsetting it
-		// by the corresponding neuron activation values in that layer.
+		// Post Process the Previous Layer Value Gradients buffer - it for now contains the sum of the single path gradients.
+		// Turn the sum into an average by dividing it by the number of neurons in the current layer then offset it by actual activation value of each source neuron
+		// to turn it into a desired value for them.
 		if (layerIndex > 1)
-		for (int previousLayerNeuronIndex = 0; previousLayerNeuronIndex < Model.layers[layerIndex - 1]->size; previousLayerNeuronIndex++)
+		for (int sourceNeuronIndex = 0; sourceNeuronIndex < Model.layers[layerIndex - 1]->size; sourceNeuronIndex++)
 		{
-			previousLayerDesiredValues[previousLayerNeuronIndex] /= Model.layers[layerIndex]->size;
-			previousLayerDesiredValues[previousLayerNeuronIndex] += Feedforward.layers[layerIndex - 1]->values[previousLayerNeuronIndex];
-			previousLayerDesiredValues[previousLayerNeuronIndex] = Activation(previousLayerDesiredValues[previousLayerNeuronIndex]);
+			// Average out the gradient sum, which should output the "Overall best" gradient for the overall cost of the current layer.
+			// Effectively this means weights and biases adapt to lower the cost of individual neurons while the neurons seek to lower the cost they add to the next layer.
+			previousLayerValueGradients[sourceNeuronIndex] /= Model.layers[layerIndex]->size;
+
+			// Get the desired value for the source neuron by offsetting the average gradient by the source neuron's activation value.
+			previousLayerValueGradients[sourceNeuronIndex] += Feedforward.layers[layerIndex - 1]->values[sourceNeuronIndex];
 		}
 
 		// Switch the desired value buffers.
 		neuron_activation* swap = currentDesiredValues;
-		currentDesiredValues = previousLayerDesiredValues;
-		previousLayerDesiredValues = swap;
+		currentDesiredValues = previousLayerValueGradients;
+		previousLayerValueGradients = swap;
 
 		// Zero out previous layer buffer to make sure no unrelated information survives to the next iteration.
-		memset(previousLayerDesiredValues, 0, desiredValuesBufferSize);
+		memset(previousLayerValueGradients, 0, desiredValuesBufferSize);
 	}
 
 	// Free allocated desired value buffers.
 	free(currentDesiredValues);
-	free(previousLayerDesiredValues);
+	free(previousLayerValueGradients);
 
-	return totalCost;
+	return totalOutputCost;
 }
 
 // Applies the accumulated changes in a Learning structure onto its origin model by averaging the sum of the requested changes
@@ -722,15 +727,15 @@ float NN_Train_CPU(AIModel_NN& Model, const MNIST_Dataset& Dataset, size_t Start
 	Feedforward_NN feedforward = InitFeedforwardInstance(Model);
 	Learning_NN learn = InitLearningInstance(Model, iterationCount);
 
-	float totalEpochError = 0.f;
+	float totalEpochCost = 0.f;
 	int iterationIndex = 0;
 	for (size_t imageIndex = StartImageIndex; imageIndex != EndImageIndex; imageIndex = ++imageIndex % Dataset.imageCount)
 	{
 		InitializeInputLayer(feedforward, Dataset.images[imageIndex]);
 		PerformFeedforward(feedforward, Model);
 
-		float iterationError = PerformBackpropagation(Model, feedforward, Dataset.images[imageIndex], Dataset.labels[imageIndex], learn, iterationIndex++);
-		if (iterationError < 0.f)
+		float iterationCost = PerformBackpropagation(Model, feedforward, Dataset.images[imageIndex], Dataset.labels[imageIndex], learn, iterationIndex++);
+		if (iterationCost < 0.f)
 		{
 			// Something went wrong during backpropagation.
 			return -1.f;
@@ -749,7 +754,7 @@ float NN_Train_CPU(AIModel_NN& Model, const MNIST_Dataset& Dataset, size_t Start
 			feedforward.layers[feedforward.layerCount - 1]->values[9]);
 #endif
 
-		totalEpochError += iterationError;
+		totalEpochCost += iterationCost;
 	}
 
 	// Apply learning batch
@@ -758,6 +763,6 @@ float NN_Train_CPU(AIModel_NN& Model, const MNIST_Dataset& Dataset, size_t Start
 	FreeFeedforwardInstance(feedforward);
 	FreeLearningInstance(learn);
 
-	return totalEpochError / iterationCount;
+	return totalEpochCost / iterationCount;
 }
 

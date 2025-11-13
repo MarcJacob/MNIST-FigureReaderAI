@@ -15,11 +15,11 @@
 	The AI is written entirely using no libraries other than default Windows & C / C++ libraries and CUDA.
 */
 
-#define PATH_TRAINING_SET_LABELS "D:\\Datasets\\MNIST\\train-labels.idx1-ubyte"
-#define PATH_TRAINING_SET_IMAGES "D:\\Datasets\\MNIST\\train-images.idx3-ubyte"
+#define PATH_TRAINING_SET_LABELS "MNIST\\train-labels.idx1-ubyte"
+#define PATH_TRAINING_SET_IMAGES "MNIST\\train-images.idx3-ubyte"
 
-#define PATH_TEST_SET_LABELS "D:\\Datasets\\MNIST\\t10k-labels.idx1-ubyte"
-#define PATH_TEST_SET_IMAGES "D:\\Datasets\\MNIST\\t10k-images.idx3-ubyte"
+#define PATH_TEST_SET_LABELS "MNIST\\t10k-labels.idx1-ubyte"
+#define PATH_TEST_SET_IMAGES "MNIST\\t10k-images.idx3-ubyte"
 
 #define KILOBYTES(n) (1024 * n)
 
@@ -215,8 +215,8 @@ int Main_TrainAndTest(int argc, char** argv)
 	
 	printf("Successfully generated model. Memory usage = %uKB.\n Training model...\n", int(newModel.modelMemorySize / 1024)); // Int conversion here is fine since it's in Kilobytes. I don't expect we'll be reaching into the Terrabytes of model size.
 
-	static const int IMAGES_PER_EPOCH = 1000;
-	static const int EPOCH_COUNT = 1000;
+	static const int IMAGES_PER_EPOCH = 5000;
+	static const int EPOCH_COUNT = 200;
 
 	for (int epochIndex = 0; epochIndex < EPOCH_COUNT; epochIndex++)
 	{

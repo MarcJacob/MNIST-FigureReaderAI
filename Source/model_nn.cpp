@@ -15,8 +15,8 @@
 #define RAND_BIAS_MAX ((neuron_bias)0.2)
 
 // Random weight value definitions. They need to be pretty low to avoid dealing with extremely large values during Feed Forward which can break the model.
-#define RAND_WEIGHT_MIN ((neuron_weight)0)
-#define RAND_WEIGHT_MAX ((neuron_weight)0.4)
+#define RAND_WEIGHT_MIN ((neuron_weight)-0.2)
+#define RAND_WEIGHT_MAX ((neuron_weight)0.2)
 
 neuron_bias GenRandomBias()
 {
@@ -198,7 +198,7 @@ void NN_FreeModel(AIModel_NN& Model)
 
 neuron_activation Activation(neuron_activation inActivation)
 {
-	return inActivation < 0 ? inActivation * 0.1f : inActivation;
+	return inActivation < 0 ? __max(-10000, inActivation * 0.1f) : __min(10000, inActivation);
 }
 
 // Defines an instance of a feedforward process for a Neural Network model. Contains only the activation values for each neurons.
@@ -401,60 +401,179 @@ FeedforwardResult_NN NN_Feedforward_CPU(const AIModel_NN& Model, const MNIST_Img
 	return ExtractResults(feedforward);
 }
 
-// Determines the Output Error of the given Feedforward result against the input Image and Label, and performs backpropagation according to it.
-// Returns the total Error "processed" for this iteration.
-float PerformBackpropagation(AIModel_NN& Model, const Feedforward_NN& Feedforward, const MNIST_Img& InputImage, const int8_t& InputLabel, size_t IterationIndex)
+// Structure that stores requested changes to neuron weights and biases on each layer (except input) for a certain number of iterations.
+// Once filled in, it can be applied to the model used to generate it by averaging all the changes together accross all iterations and
+// using those values to perform the actual model change.
+struct Learning_NN
 {
-	static float constexpr LEARNING_RATE = 0.000001f;
+	struct Layer
+	{
+		// Size of previous layer, which determines the size of the weight changes.
+		size_t previousLayerSize;
+		// Size of the layer itself, which determines the size of the weight changes and the bias changes.
+		size_t layerSize;
+		// Requested weight changes, size equals (previous layer size) * (layer size) * sizeof(neuron_weight) * (batch size)
+		// Weight changes are organized iteration-wise, then target-neuron-wise (since these are the values that "belong" to the same layer element).
+		neuron_weight* weightChanges;
+		// Requested bias changes, size equals (layer size) * sizeof(neuron_bias) * (batch size)
+		// Bias changes are organized iteration-wise.
+		neuron_bias* biasChanges;
+	};
+
+	size_t batchSize; // Expected size of the full "learning batch". For each iteration in the batch, there should be requested change for every weight and bias.
+	size_t layerCount;
+	Layer** layers; // Main layers memory, with the following format: [layers]...[Layer N-1 struct][Weight Changes][Bias changes][Layer N]...
+};
+
+Learning_NN InitLearningInstance(const AIModel_NN& Model, size_t BatchSize)
+{
+	Learning_NN newLearning = {};
+
+	// Check that model is valid
+	if (Model.layerCount < 3) // Input, Output and at least one hidden layer.
+	{
+		return {};
+	}
+
+	// Check that we are asking for at least one iteration per batch.
+	if (BatchSize == 0)
+	{
+		return {};
+	}
+
+	newLearning.layerCount = Model.layerCount - 1; // No input layer.
+	newLearning.batchSize = BatchSize;
+	size_t learningMemorySize = sizeof(Learning_NN::Layer*) * newLearning.layerCount; // Layer pointers.
+
+	// Each layer has a specific size since their internal data size depends on their size in the model and the size of the previous layer.
+	for (int layerIndex = 0; layerIndex < newLearning.layerCount; layerIndex++)
+	{
+		int modelLayerIndex = layerIndex + 1;
+		learningMemorySize += sizeof(Learning_NN::Layer) // Layer structure
+			+ Model.layers[modelLayerIndex - 1]->size * Model.layers[modelLayerIndex]->size * sizeof(neuron_weight) // Weights from previous layer to this one
+			+ Model.layers[modelLayerIndex]->size * sizeof(neuron_bias); // Biases for this layer
+	}
+
+	uint8_t* learningMemory = (uint8_t*)malloc(learningMemorySize);
+	newLearning.layers = (Learning_NN::Layer**)learningMemory;
+	if (newLearning.layers == nullptr)
+	{
+		return {};
+	}
+
+	memset(learningMemory, 0, learningMemorySize);
+
+#if _DEBUG
+
+	uint8_t* learningMemoryStart = learningMemory;
+
+#endif
+
+	// Offset memory pointer.
+	learningMemory += sizeof(Learning_NN::Layer*) * newLearning.layerCount;
+
+	// Organize layers.
+	for (int layerIndex = 0; layerIndex < newLearning.layerCount; layerIndex++)
+	{
+		int modelLayerIndex = layerIndex + 1;
+
+		newLearning.layers[layerIndex] = (Learning_NN::Layer*)learningMemory;
+		newLearning.layers[layerIndex]->layerSize = Model.layers[modelLayerIndex]->size;
+		newLearning.layers[layerIndex]->previousLayerSize = Model.layers[modelLayerIndex - 1]->size;
+
+		newLearning.layers[layerIndex]->weightChanges = (neuron_weight*)(learningMemory + sizeof(Learning_NN::Layer));
+		newLearning.layers[layerIndex]->biasChanges = (neuron_bias*)(
+			learningMemory + sizeof(Learning_NN::Layer)
+			+ Model.layers[modelLayerIndex - 1]->size * Model.layers[modelLayerIndex]->size * sizeof(neuron_weight));
+
+		// Offset memory pointer.
+		learningMemory += sizeof(Learning_NN::Layer)
+			+ Model.layers[modelLayerIndex - 1]->size * Model.layers[modelLayerIndex]->size * sizeof(neuron_weight)
+			+ Model.layers[modelLayerIndex]->size * sizeof(neuron_bias);
+	}
+
+#if _DEBUG
+
+	// Check that we've allocated exactly the expected amount of memory.
+	size_t allocatedSize = learningMemory - learningMemoryStart;
+	if (allocatedSize != learningMemorySize)
+	{
+		__debugbreak();
+	}
+
+#endif
+
+	return newLearning;
+}
+
+void FreeLearningInstance(Learning_NN& Learn)
+{
+	// All the allocated memory for a Learn structure is tied to its layers pointer.
+	free(Learn.layers);
+}
+
+// Determines the Output Error of the given Feedforward result against the input Image and Label, and fills in the passed Learning Structure at the relevant iteration.
+// Returns the total Error "processed" for this iteration.
+float PerformBackpropagation(const AIModel_NN& Model, const Feedforward_NN& Feedforward, const MNIST_Img& InputImage, const int8_t& InputLabel, Learning_NN& Learning, size_t IterationIndex)
+{
+	static double constexpr LEARNING_RATE = 0.0001;
 
 	// Check that label value is valid.
 	if (InputLabel > 9) return -1.f;
 
+	// Check that passed in Learning Structure is large enough for the Iteration Index.
+	if (Learning.batchSize <= IterationIndex)
+	{
+		return -1.f;
+	}
+
 	// Use a double-buffered system for holding Desired Values for the current and previous layer while backpropagating.
 	// They are as large as the largest layer in the model, meaning no bound checking or extra allocations are ever required for them in the whole backpropagation process.
-	neuron_activation* currentDesiredValues;
-	neuron_activation* previousLayerDesiredValues;
+	neuron_activation* currentDesiredValues = nullptr;
+	neuron_activation* previousLayerDesiredValues = nullptr;
 	size_t desiredValuesBufferSize;
+	
+	// Use the largest layer size in the model to determine the allocation size of the buffers, with the exception of the input buffer
+	// for which "desired values" are irrelevant.
+
+	uint16_t largestLayerSize = 0;
+	for (int layerIndex = 1; layerIndex < Model.layerCount; layerIndex++)
 	{
-		// Use the largest layer size in the model to determine the allocation size of the buffers, with the exception of the input buffer
-		// for which "desired values" are irrelevant.
-
-		uint16_t largestLayerSize = 0;
-		for (int layerIndex = 1; layerIndex < Model.layerCount; layerIndex++)
+		if (Model.layers[layerIndex]->size > largestLayerSize)
 		{
-			if (Model.layers[layerIndex]->size > largestLayerSize)
-			{
-				largestLayerSize = Model.layers[layerIndex]->size;
-			}
+			largestLayerSize = Model.layers[layerIndex]->size;
 		}
-
-		if (largestLayerSize == 0)
-		{
-			return -1.f;
-		}
-
-		desiredValuesBufferSize = largestLayerSize * sizeof(neuron_activation);
-		currentDesiredValues = (neuron_activation*)malloc(desiredValuesBufferSize);
-		previousLayerDesiredValues = (neuron_activation*)malloc(desiredValuesBufferSize);
-
-		if (currentDesiredValues == nullptr || previousLayerDesiredValues == nullptr)
-		{
-			return -1.f;
-		}
-
-		memset(currentDesiredValues, 0, desiredValuesBufferSize);
-		memset(previousLayerDesiredValues, 0, desiredValuesBufferSize);
 	}
+
+	if (largestLayerSize == 0)
+	{
+		return -1.f;
+	}
+
+	desiredValuesBufferSize = largestLayerSize * sizeof(neuron_activation);
+	currentDesiredValues = (neuron_activation*)malloc(desiredValuesBufferSize);
+	previousLayerDesiredValues = (neuron_activation*)malloc(desiredValuesBufferSize);
+
+	if (currentDesiredValues == nullptr || previousLayerDesiredValues == nullptr)
+	{
+		return -1.f;
+	}
+
+	memset(currentDesiredValues, 0, desiredValuesBufferSize);
+	memset(previousLayerDesiredValues, 0, desiredValuesBufferSize);
+	
 
 	// Initialize the output layer desired values according to the label.
 
 	currentDesiredValues[InputLabel] = 1;
 
-	float totalCost = 0.f;
+	double totalCost = 0.f;
 
 	// Work our way backwards starting from the output layer.
 	for (int layerIndex = Model.layerCount - 1; layerIndex > 0; layerIndex--)
 	{
+		int learningLayerIndex = layerIndex - 1;
+
 		// For each neuron in the layer, determine the error between the corresponding FeedforwardResult value and desired value.
 		// Then, determine a change in inbound weight values and bias to reduce this error.
 		// Once the weights and the bias are updated, determine the relative error for all inbound neurons and add it to their place in the previous layer desired values.
@@ -484,24 +603,48 @@ float PerformBackpropagation(AIModel_NN& Model, const Feedforward_NN& Feedforwar
 				neuron_weight& inboundWeight = Model.layers[layerIndex - 1]->weights[neuronIndex * Model.layers[layerIndex - 1]->size + previousLayerNeuronIndex];
 				const neuron_activation& inboundValue = Feedforward.layers[layerIndex - 1]->values[previousLayerNeuronIndex];
 
-				// Determine gradient for inbound weight.
+#if 1 // WEIGHT LEARNING
+
+				// Determine gradient for inbound weight and add it to the requested change for this specific weight in the model.
 				float costDeltaByWeight = inboundValue * 2 * (currentValue - currentDesired) * GRADIENT_BASE;
-				inboundWeight += LEARNING_RATE * -costDeltaByWeight;
+				if (costDeltaByWeight != 0.f)
+				{
+					Learning.layers[learningLayerIndex]->weightChanges[
+						neuronIndex * Learning.layers[learningLayerIndex]->previousLayerSize // Target neuron
+							+ previousLayerNeuronIndex]  // Source neuron
+						+= LEARNING_RATE * cost / -costDeltaByWeight; // Add negative of cost delta multiplied by Learning Rate.
+				}
+#endif
+
+#if 1 // DESIRED VALUE BACK PROPAGATION
 
 				// Determine gradient for previous layer neuron.
+				// This does not need to be added to the Learning structure since we only care about weight and bias changes.
+				// The desired value for the previous layers are aggregated together as a relative error and will determine
+				// the weight and bias changes for that layer, and so on recursively until reaching the first hidden layer.
 				float costDeltaByInboundValue = inboundWeight * 2 * (currentValue - currentDesired) * GRADIENT_BASE;
-				previousLayerDesiredValues[previousLayerNeuronIndex] += LEARNING_RATE * -costDeltaByInboundValue;
+				if (layerIndex > 1 && costDeltaByInboundValue != 0)
+				{
+					previousLayerDesiredValues[previousLayerNeuronIndex] += LEARNING_RATE * cost / -costDeltaByInboundValue;
+				}
+#endif
 			}
 
 			neuron_bias& currentBias = Model.layers[layerIndex]->biases[neuronIndex];
 
+#if 1 // BIAS LEARNING
+			// Determine gradient for bias.
 			float costDeltaByBias = 2 * (currentValue - currentDesired) * GRADIENT_BASE;
-			currentBias += LEARNING_RATE * -costDeltaByBias;
+			if (costDeltaByBias != 0.f)
+			{
+				Learning.layers[learningLayerIndex]->biasChanges[neuronIndex] += LEARNING_RATE * cost / -costDeltaByBias; // Set to negative of cost delta multiplied by Learning Rate.
+			}
+#endif
 		}
 
 		// Post Process the Previous Layer Desired Values buffer - it for now contains the sum of the relative errors. Switch it back to desired values by offsetting it
 		// by the corresponding neuron activation values in that layer.
-		if (layerIndex - 1 > 0)
+		if (layerIndex > 1)
 		for (int previousLayerNeuronIndex = 0; previousLayerNeuronIndex < Model.layers[layerIndex - 1]->size; previousLayerNeuronIndex++)
 		{
 			previousLayerDesiredValues[previousLayerNeuronIndex] /= Model.layers[layerIndex]->size;
@@ -525,6 +668,40 @@ float PerformBackpropagation(AIModel_NN& Model, const Feedforward_NN& Feedforwar
 	return totalCost;
 }
 
+// Applies the accumulated changes in a Learning structure onto its origin model by averaging the sum of the requested changes
+// collected during backpropagation and applying them to the Model
+void ApplyLearning(const Learning_NN& Learn, AIModel_NN& Model)
+{
+	// Go through every neuron in the model starting from the first hidden layer, aggregate the Learning changes and apply them.
+
+	for (int layerIndex = Model.layerCount - 1; layerIndex > 0; layerIndex--)
+	{
+		AIModel_NN::Layer& currentLayer = *Model.layers[layerIndex];
+		AIModel_NN::Layer& previousLayer = *Model.layers[layerIndex - 1];
+		Learning_NN::Layer& learningLayer = *Learn.layers[layerIndex - 1]; // Offset from Model to Learning layer.
+		for (int neuronIndex = 0; neuronIndex < currentLayer.size; neuronIndex++)
+		{
+			for (int sourceNeuronIndex = 0; sourceNeuronIndex < previousLayer.size; sourceNeuronIndex++)
+			{
+				// Aggregate the weight changes by averaging the sum value using the batch size and modify the model accordingly.
+				neuron_weight changeSum = learningLayer.weightChanges[neuronIndex * learningLayer.layerSize + sourceNeuronIndex];
+				changeSum /= Learn.batchSize;
+
+				// Weights from source to target are stored in the source layer memory, target-neuron-wise.
+				previousLayer.weights[neuronIndex * previousLayer.size + sourceNeuronIndex] += changeSum;
+			}
+
+			// Aggregate the bias changes by avergaging the sum value using the batch size and modify the model accordingly.
+			neuron_bias changeSum = learningLayer.biasChanges[neuronIndex];
+			changeSum /= Learn.batchSize;
+			
+			currentLayer.biases[neuronIndex] += changeSum;
+		}
+	}
+
+	// All done !
+}
+
 float NN_Train_CPU(AIModel_NN& Model, const MNIST_Dataset& Dataset, size_t StartImageIndex, size_t EndImageIndex)
 {
 	// Sanity checks
@@ -533,24 +710,31 @@ float NN_Train_CPU(AIModel_NN& Model, const MNIST_Dataset& Dataset, size_t Start
 		)
 		return -1.f;
 
+	int iterationCount = EndImageIndex - StartImageIndex;
+	if (iterationCount < 0)
+	{
+		iterationCount = Dataset.imageCount + iterationCount;
+	}
+
 	// In order to perform an epoch, Feedforward must be performed on the provided slice of the dataset using the Model.
 	// At the end of each feedforward iteration, a "Learn Structure" is built by accumulation before it is passed to the final Backpropagation step.
 	// Once backpropagation is done, the total output error is returned as indication of where the model was performance-wise *before* backpropagation happened.
 	Feedforward_NN feedforward = InitFeedforwardInstance(Model);
+	Learning_NN learn = InitLearningInstance(Model, iterationCount);
+
 	float totalEpochError = 0.f;
-	int iterationCount = 0;
+	int iterationIndex = 0;
 	for (size_t imageIndex = StartImageIndex; imageIndex != EndImageIndex; imageIndex = ++imageIndex % Dataset.imageCount)
 	{
 		InitializeInputLayer(feedforward, Dataset.images[imageIndex]);
 		PerformFeedforward(feedforward, Model);
 
-		float iterationError = PerformBackpropagation(Model, feedforward, Dataset.images[imageIndex], Dataset.labels[imageIndex], iterationCount);
+		float iterationError = PerformBackpropagation(Model, feedforward, Dataset.images[imageIndex], Dataset.labels[imageIndex], learn, iterationIndex++);
 		if (iterationError < 0.f)
 		{
 			// Something went wrong during backpropagation.
 			return -1.f;
 		}
-
 #if 0
 		printf("Results = [%f, %f, %f, %f, %f, %f, %f, %f, %f, %f]\n",
 			feedforward.layers[feedforward.layerCount - 1]->values[0], 
@@ -566,10 +750,13 @@ float NN_Train_CPU(AIModel_NN& Model, const MNIST_Dataset& Dataset, size_t Start
 #endif
 
 		totalEpochError += iterationError;
-		iterationCount++;
 	}
 
+	// Apply learning batch
+	ApplyLearning(learn, Model);
+
 	FreeFeedforwardInstance(feedforward);
+	FreeLearningInstance(learn);
 
 	return totalEpochError / iterationCount;
 }

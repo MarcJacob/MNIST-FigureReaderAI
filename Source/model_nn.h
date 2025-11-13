@@ -55,4 +55,4 @@ FeedforwardResult_NN NN_Feedforward_CPU(const AIModel_NN& Model, const MNIST_Img
 // Backpropagation is performed to tune the model in order to reduce future error.
 // The entire process runs on the CPU.
 // Returns the accumulated error value over the outputs during the epoch.
-float NN_Train_CPU(AIModel_NN&, const MNIST_Dataset& Dataset, size_t StartImageIndex, size_t EndImageIndex);
+float NN_Train_CPU(AIModel_NN&, const MNIST_Dataset& Dataset, size_t StartImageIndex, size_t EndImageIndex, float LearningRate);

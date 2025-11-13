@@ -543,8 +543,6 @@ void FreeLearningInstance(Learning_NN& Learn)
 // Returns the total Error "processed" for this iteration.
 float PerformBackpropagation(const AIModel_NN& Model, const Feedforward_NN& Feedforward, const MNIST_Img& InputImage, const int8_t& InputLabel, Learning_NN& Learning, size_t IterationIndex)
 {
-	static double constexpr LEARNING_RATE = 0.1;
-
 	// Check that label value is valid.
 	if (InputLabel > 9) return -1.f;
 
@@ -622,13 +620,13 @@ float PerformBackpropagation(const AIModel_NN& Model, const Feedforward_NN& Feed
 			neuron_activation outputCost = Cost(outputActivation, currentDesiredValues[neuronIndex]);
 
 			// Bias gradient descent
-			learningLayer.biasChanges[neuronIndex] += LEARNING_RATE * -GetBiasCostGradient(outputActivation, outputCost);
+			learningLayer.biasChanges[neuronIndex] += -GetBiasCostGradient(outputActivation, outputCost);
 
 			for (int sourceNeuronIndex = 0; sourceNeuronIndex < Model.layers[layerIndex - 1]->size; sourceNeuronIndex++)
 			{
 				// Weight gradient descent
 				neuron_activation sourceActivation = Feedforward.layers[layerIndex - 1]->values[sourceNeuronIndex];
-				neuron_weight weightChange = LEARNING_RATE * -GetWeightCostGradient(sourceActivation, outputActivation, currentDesiredValues[neuronIndex]);
+				neuron_weight weightChange = -GetWeightCostGradient(sourceActivation, outputActivation, currentDesiredValues[neuronIndex]);
 				learningLayer.weightChanges[neuronIndex * Model.layers[layerIndex - 1]->size + sourceNeuronIndex]
 					+= weightChange;
 			}
@@ -639,7 +637,7 @@ float PerformBackpropagation(const AIModel_NN& Model, const Feedforward_NN& Feed
 			for (int sourceNeuronIndex = 0; sourceNeuronIndex < Model.layers[layerIndex - 1]->size; sourceNeuronIndex++)
 			{
 				neuron_weight sourceWeight = Model.layers[layerIndex - 1]->weights[neuronIndex * Model.layers[layerIndex - 1]->size + sourceNeuronIndex];
-				previousLayerValueGradients[sourceNeuronIndex] += LEARNING_RATE * -GetSinglePathNeuronCostGradient(sourceWeight, outputActivation, currentDesiredValues[neuronIndex]);
+				previousLayerValueGradients[sourceNeuronIndex] += -GetSinglePathNeuronCostGradient(sourceWeight, outputActivation, currentDesiredValues[neuronIndex]);
 			}
 		}
 
@@ -675,7 +673,7 @@ float PerformBackpropagation(const AIModel_NN& Model, const Feedforward_NN& Feed
 
 // Applies the accumulated changes in a Learning structure onto its origin model by averaging the sum of the requested changes
 // collected during backpropagation and applying them to the Model
-void ApplyLearning(const Learning_NN& Learn, AIModel_NN& Model)
+void ApplyLearning(const Learning_NN& Learn, AIModel_NN& Model, float LearningRate)
 {
 	// Go through every neuron in the model starting from the first hidden layer, aggregate the Learning changes and apply them.
 
@@ -693,21 +691,21 @@ void ApplyLearning(const Learning_NN& Learn, AIModel_NN& Model)
 				changeSum /= Learn.batchSize;
 
 				// Weights from source to target are stored in the source layer memory, target-neuron-wise.
-				previousLayer.weights[neuronIndex * previousLayer.size + sourceNeuronIndex] += changeSum;
+				previousLayer.weights[neuronIndex * previousLayer.size + sourceNeuronIndex] += changeSum * LearningRate;
 			}
 
 			// Aggregate the bias changes by avergaging the sum value using the batch size and modify the model accordingly.
 			neuron_bias changeSum = learningLayer.biasChanges[neuronIndex];
 			changeSum /= Learn.batchSize;
 			
-			currentLayer.biases[neuronIndex] += changeSum;
+			currentLayer.biases[neuronIndex] += changeSum * LearningRate;
 		}
 	}
 
 	// All done !
 }
 
-float NN_Train_CPU(AIModel_NN& Model, const MNIST_Dataset& Dataset, size_t StartImageIndex, size_t EndImageIndex)
+float NN_Train_CPU(AIModel_NN& Model, const MNIST_Dataset& Dataset, size_t StartImageIndex, size_t EndImageIndex, float LearningRate)
 {
 	// Sanity checks
 	if (	Model.layerCount < 3 || Model.layers == nullptr
@@ -758,7 +756,7 @@ float NN_Train_CPU(AIModel_NN& Model, const MNIST_Dataset& Dataset, size_t Start
 	}
 
 	// Apply learning batch
-	ApplyLearning(learn, Model);
+	ApplyLearning(learn, Model, LearningRate);
 
 	FreeFeedforwardInstance(feedforward);
 	FreeLearningInstance(learn);

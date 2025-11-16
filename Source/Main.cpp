@@ -223,7 +223,7 @@ int Main_TrainAndTest(int argc, char** argv)
 	{
 		int startImageIndex = epochIndex * IMAGES_PER_EPOCH % TrainingData.imageCount;
 		int endImageIndex = (epochIndex + 1) * IMAGES_PER_EPOCH % TrainingData.imageCount;
-		float cost = NN_Train_CPU(newModel, TrainingData, startImageIndex, endImageIndex, 0.5);
+		float cost = NN_Train_CPU(newModel, TrainingData, startImageIndex, endImageIndex, 0.1);
 
 		if (cost < 0)
 		{

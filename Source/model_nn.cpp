@@ -173,7 +173,7 @@ AIModel_NN NN_InitModel(uint16_t hiddenLayerCount, uint16_t hiddenLayerSize, boo
 			{
 				for (uint16_t targetNeuronIndex = 0; targetNeuronIndex < newModel.layers[layerIndex + 1]->size; targetNeuronIndex++)
 				{
-					newModel.layers[layerIndex]->weights[targetNeuronIndex * newModel.layers[layerIndex]->size + neuronIndex] = GenRandomWeight(-4.f / newModel.layers[layerIndex]->size, 4.f / newModel.layers[layerIndex]->size);
+					newModel.layers[layerIndex]->weights[targetNeuronIndex * newModel.layers[layerIndex]->size + neuronIndex] = GenRandomWeight(-1.f / newModel.layers[layerIndex]->size, 1.f / newModel.layers[layerIndex]->size);
 				}
 			}
 		}
@@ -208,21 +208,21 @@ inline model_cost Cost(neuron_activation Activation, neuron_activation Desired)
 	return (Activation - Desired) * (Activation - Desired);
 }
 
-// Returns the cost gradient of a source neuron's weight.
+// Returns the cost gradient of a source neuron's weight. NOTE: Does not work for output layer neurons since they have Softmax applied to their value !
 inline model_cost GetWeightCostGradient(neuron_activation SourceNeuronActivation, neuron_activation TargetNeuronActivation, neuron_activation DesiredActivation)
 {
 	// Note: Using TargetNeuronActivation in d_Activation here isn't quite correct because we need the neuron value PRE activation function, but since we are using ReLU it should work.
 	return SourceNeuronActivation * 2 * (TargetNeuronActivation - DesiredActivation) * d_Activation(TargetNeuronActivation);
 }
 
-// Returns the cost gradient of a neuron's bias.
+// Returns the cost gradient of a neuron's bias. NOTE: Does not work for output layer neurons since they have Softmax applied to their value !
 inline model_cost GetBiasCostGradient(neuron_activation TargetNeuronActivation, neuron_activation DesiredActivation)
 {
 	return 2 * (TargetNeuronActivation - DesiredActivation) * d_Activation(TargetNeuronActivation);
 }
 
 // Returns the cost gradient of a source neuron's value from the perspective of a single target neuron. Take care to average together all the values for all
-// target neurons on the target layer for each source neuron !
+// target neurons on the target layer for each source neuron ! Note: Does not work for output layer neurons since they have Softmax applied to their value !
 inline model_cost GetSinglePathNeuronCostGradient(neuron_weight SourceWeight, neuron_activation TargetNeuronActivation, neuron_activation DesiredActivation)
 {
 	return SourceWeight * 2 * (TargetNeuronActivation - DesiredActivation) * d_Activation(TargetNeuronActivation);
@@ -346,7 +346,6 @@ void PerformFeedforward(Feedforward_NN& Feedforward, const AIModel_NN& Model)
 		}
 	}
 
-#if 0 // TODO Determine if this is really necessary. Having this happen on the output layer makes the determination of a learning gradient far more complicated.
 	// Since we want the result values to be a distribution of probabilities, we need the sum of all outputs to be equal to 1 and between 0 and 1.
 	// We also want lower output values to be closer to 0 and higher output values to be closer to 1.
 	// The simplest way of achieving this seems to be to raise something to the power of the outputs ("Transformation", bringing all outputs into the positive space),
@@ -367,12 +366,17 @@ void PerformFeedforward(Feedforward_NN& Feedforward, const AIModel_NN& Model)
 		}
 	}
 
+	if (maxOutput * maxOutput < 1)
+	{
+		maxOutput = 1; // No normalization for small max absolute output values.
+	}
+
 	// Compute transformed values and their sum.
 	double_t transformedSum = 0;
 	for (int outputNeuronIndex = 0; outputNeuronIndex < OUTPUT_LAYER_SIZE; outputNeuronIndex++)
 	{
 		// Raise exponential to the value of the output normalized by maximum for greater number (and system) stability.
-		Feedforward.layers[Model.layerCount - 1]->values[outputNeuronIndex] = exp(Feedforward.layers[Model.layerCount - 1]->values[outputNeuronIndex] / maxOutput);
+		Feedforward.layers[Model.layerCount - 1]->values[outputNeuronIndex] = exp(Feedforward.layers[Model.layerCount - 1]->values[outputNeuronIndex] - maxOutput);
 		transformedSum += Feedforward.layers[Model.layerCount - 1]->values[outputNeuronIndex];
 	}
 
@@ -381,7 +385,6 @@ void PerformFeedforward(Feedforward_NN& Feedforward, const AIModel_NN& Model)
 	{
 		Feedforward.layers[Model.layerCount - 1]->values[outputNeuronIndex] /= transformedSum;
 	}
-#endif
 }
 
 // Read the output values of a feedforward structure and convert them to a valid probability distribution within a Result structure.
@@ -605,7 +608,117 @@ float PerformBackpropagation(const AIModel_NN& Model, const Feedforward_NN& Feed
 
 	// Backpropagation
 	// Work our way backwards starting from the output layer.
-	for (int layerIndex = Model.layerCount - 1; layerIndex > 0; layerIndex--)
+
+	// OUTPUT LAYER -> LAST HIDDEN LAYER
+	// The output layer gets Softmax applied to its values so its gradients are different.
+	{
+		int layerIndex = Model.layerCount - 1;
+		// Learning Layer in which to record the desired changes in weights and biases.
+		Learning_NN::Layer& learningLayer = *Learning.layers[layerIndex - 1];
+
+		// For each neuron in the output, determine the error between the corresponding FeedforwardResult value and desired value.
+		// Then, determine a change in inbound weight values and bias to reduce this error.
+		// Determine the relative error for all inbound neurons and add it to their place in the previous layer desired values array.
+		// Those sums will then be converted back to an actual desired value as a post processing step using their actual value during the feed forward phase, saving memory.
+		for (int neuronIndex = 0; neuronIndex < OUTPUT_LAYER_SIZE; neuronIndex++)
+		{
+			const neuron_activation& outputActivation = Feedforward.layers[layerIndex]->values[neuronIndex];
+			neuron_activation outputCost = Cost(outputActivation, currentDesiredValues[neuronIndex]);
+
+			// Bias gradient descent
+			// Determine the change in value for all output layer neurons and average them to obtain the "global" descent for the bias.
+			neuron_bias biasCostGradient = 0;
+			neuron_activation biasGradient = d_Activation(outputActivation); // Change in pre-softmax value of the output for each added bias.
+			for (int otherOutputLayerNeuronIndex = 0; otherOutputLayerNeuronIndex < OUTPUT_LAYER_SIZE; otherOutputLayerNeuronIndex++)
+			{
+				const neuron_activation& otherOutputValue = Feedforward.layers[layerIndex]->values[otherOutputLayerNeuronIndex];
+				neuron_activation softmaxGradient = otherOutputLayerNeuronIndex == neuronIndex ?
+					outputActivation - (outputActivation * outputActivation) :
+					- otherOutputValue * outputActivation; // Gradient of the softmaxed value of other neuron for a pre-softmax change in this neuron.
+				
+				neuron_activation otherCostGradient = -2 * (currentDesiredValues[otherOutputLayerNeuronIndex] - otherOutputValue); // Cost gradient for a change in output value of other neuron.
+
+				biasCostGradient += biasGradient * softmaxGradient * otherCostGradient;
+			}
+
+			// Average out the cost gradient sum, then apply to bias changes.
+			//biasCostGradient /= OUTPUT_LAYER_SIZE;
+			learningLayer.biasChanges[neuronIndex] += -biasCostGradient;
+
+			// Weight gradient descent
+			// For each source neuron, determine the change in value for all output layer neurons and average them to obtain the "global" descent for the source weight.
+			for (int sourceNeuronIndex = 0; sourceNeuronIndex < Model.layers[layerIndex - 1]->size; sourceNeuronIndex++)
+			{
+				const neuron_activation& sourceActivation = Feedforward.layers[layerIndex - 1]->values[sourceNeuronIndex];
+				
+				neuron_activation weightGradient = sourceActivation * d_Activation(outputActivation); // Change in pre-softmax value of this neuron for a change in weight of source neuron.
+				neuron_weight weightCostGradient = 0;
+				
+				for (int otherOutputLayerNeuronIndex = 0; otherOutputLayerNeuronIndex < OUTPUT_LAYER_SIZE; otherOutputLayerNeuronIndex++)
+				{
+					const neuron_activation& otherOutputValue = Feedforward.layers[layerIndex]->values[otherOutputLayerNeuronIndex];
+					neuron_activation softmaxGradient = otherOutputLayerNeuronIndex == neuronIndex ?
+						outputActivation - (outputActivation * outputActivation) :
+						-otherOutputValue * outputActivation; // Gradient of the softmaxed value of other neuron for a pre-softmax change in this neuron.
+
+					neuron_activation otherCostGradient = -2 * (currentDesiredValues[otherOutputLayerNeuronIndex] - otherOutputValue); // Cost gradient for a change in output value of other neuron.
+
+					weightCostGradient += weightGradient * softmaxGradient * otherCostGradient;
+				}
+
+				// Average out the cost gradient sum, then apply to weight change.
+				//weightCostGradient /= OUTPUT_LAYER_SIZE;
+				learningLayer.weightChanges[neuronIndex * Model.layers[layerIndex - 1]->size + sourceNeuronIndex] += -weightCostGradient;
+			}
+
+			// Determine the error to add to each source neuron.
+			for (int sourceNeuronIndex = 0; sourceNeuronIndex < Model.layers[layerIndex - 1]->size; sourceNeuronIndex++)
+			{ 
+				const neuron_weight& sourceWeight = Model.layers[layerIndex - 1]->weights[neuronIndex * Model.layers[layerIndex - 1]->size + sourceNeuronIndex];
+				neuron_activation sourceActivationGradient = sourceWeight * d_Activation(outputActivation); // Change in pre-softmax activation value of this neuron for a change in activation value from the source neuron.
+
+				neuron_weight sourceActivationCostGradient = 0;
+
+				for (int otherOutputLayerNeuronIndex = 0; otherOutputLayerNeuronIndex < OUTPUT_LAYER_SIZE; otherOutputLayerNeuronIndex++)
+				{
+					const neuron_activation& otherOutputValue = Feedforward.layers[layerIndex]->values[otherOutputLayerNeuronIndex];
+					neuron_activation softmaxGradient = otherOutputLayerNeuronIndex == neuronIndex ?
+						outputActivation - (outputActivation * outputActivation) :
+						-otherOutputValue * outputActivation; // Gradient of the softmaxed value of other neuron for a pre-softmax change in this neuron.
+
+					neuron_activation otherCostGradient = -2 * (currentDesiredValues[otherOutputLayerNeuronIndex] - otherOutputValue); // Cost gradient for a change in output value of other neuron.
+
+					sourceActivationCostGradient += sourceActivationGradient * softmaxGradient * otherCostGradient;
+				}
+
+				previousLayerValueGradients[sourceNeuronIndex] += -sourceActivationCostGradient;
+			}
+		}
+
+		// Post Process the Previous Layer Value Gradients buffer - it for now contains the sum of the single path gradients.
+		// Turn the sum into an average by dividing it by the number of neurons in the current layer then offset it by actual activation value of each source neuron
+		// to turn it into a desired value for them.
+		for (int sourceNeuronIndex = 0; sourceNeuronIndex < Model.layers[layerIndex - 1]->size; sourceNeuronIndex++)
+		{
+			// Average out the gradient sum, which should output the "Overall best" gradient for the overall cost of the current layer.
+			// Effectively this means weights and biases adapt to lower the cost of individual neurons while the neurons seek to lower the cost they add to the next layer.
+			previousLayerValueGradients[sourceNeuronIndex] /= Model.layers[layerIndex]->size;
+			previousLayerValueGradients[sourceNeuronIndex] *= 10;
+			// Get the desired value for the source neuron by offsetting the average gradient by the source neuron's activation value.
+			previousLayerValueGradients[sourceNeuronIndex] += Feedforward.layers[layerIndex - 1]->values[sourceNeuronIndex];
+		}
+
+		// Switch the desired value buffers.
+		neuron_activation* swap = currentDesiredValues;
+		currentDesiredValues = previousLayerValueGradients;
+		previousLayerValueGradients = swap;
+
+		// Zero out previous layer buffer to make sure no unrelated information survives to the next iteration.
+		memset(previousLayerValueGradients, 0, desiredValuesBufferSize);
+	}
+	
+	// HIDDEN LAYERS -> INPUT LAYER
+	for (int layerIndex = Model.layerCount - 2; layerIndex > 0; layerIndex--)
 	{
 		// Learning Layer in which to record the desired changes in weights and biases.
 		Learning_NN::Layer& learningLayer = *Learning.layers[layerIndex - 1];
@@ -620,7 +733,7 @@ float PerformBackpropagation(const AIModel_NN& Model, const Feedforward_NN& Feed
 			neuron_activation outputCost = Cost(outputActivation, currentDesiredValues[neuronIndex]);
 
 			// Bias gradient descent
-			learningLayer.biasChanges[neuronIndex] += -GetBiasCostGradient(outputActivation, outputCost);
+			learningLayer.biasChanges[neuronIndex] += -GetBiasCostGradient(outputActivation, currentDesiredValues[neuronIndex]);
 
 			for (int sourceNeuronIndex = 0; sourceNeuronIndex < Model.layers[layerIndex - 1]->size; sourceNeuronIndex++)
 			{

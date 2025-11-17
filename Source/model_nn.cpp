@@ -169,11 +169,11 @@ AIModel_NN NN_InitModel(uint16_t hiddenLayerCount, uint16_t hiddenLayerSize, boo
 			// I'd rather have checked the layer index but Intellisense was "warning" me that dereferencing ->weights was dangerous unless I explicitly checked the pointer's
 			// non-nullity. Thanks Microsoft.
 		{
-			for (uint16_t neuronIndex = 0; neuronIndex < newModel.layers[layerIndex]->size; neuronIndex++)
+			for (uint16_t targetNeuronIndex = 0; targetNeuronIndex < newModel.layers[layerIndex + 1]->size; targetNeuronIndex++)
 			{
-				for (uint16_t targetNeuronIndex = 0; targetNeuronIndex < newModel.layers[layerIndex + 1]->size; targetNeuronIndex++)
+				for (uint16_t neuronIndex = 0; neuronIndex < newModel.layers[layerIndex]->size; neuronIndex++)
 				{
-					newModel.layers[layerIndex]->weights[targetNeuronIndex * newModel.layers[layerIndex]->size + neuronIndex] = GenRandomWeight(0, 2.f / newModel.layers[layerIndex]->size);
+					newModel.layers[layerIndex]->weights[targetNeuronIndex * newModel.layers[layerIndex]->size + neuronIndex] = GenRandomWeight(-0.1, 0.1);
 				}
 			}
 		}
@@ -210,26 +210,6 @@ inline model_cost Cost(neuron_activation Activation, neuron_activation Desired)
 #else
 	return (Desired * log(Activation));
 #endif
-}
-
-// Returns the cost gradient of a source neuron's weight. NOTE: Does not work for output layer neurons since they have Softmax applied to their value !
-inline model_cost GetWeightCostGradient(neuron_activation SourceNeuronActivation, neuron_activation TargetNeuronActivation, neuron_activation DesiredActivation)
-{
-	// Note: Using TargetNeuronActivation in d_Activation here isn't quite correct because we need the neuron value PRE activation function, but since we are using ReLU it should work.
-	return SourceNeuronActivation * 2 * (TargetNeuronActivation - DesiredActivation) * d_Activation(TargetNeuronActivation);
-}
-
-// Returns the cost gradient of a neuron's bias. NOTE: Does not work for output layer neurons since they have Softmax applied to their value !
-inline model_cost GetBiasCostGradient(neuron_activation TargetNeuronActivation, neuron_activation DesiredActivation)
-{
-	return 2 * (TargetNeuronActivation - DesiredActivation) * d_Activation(TargetNeuronActivation);
-}
-
-// Returns the cost gradient of a source neuron's value from the perspective of a single target neuron. Take care to average together all the values for all
-// target neurons on the target layer for each source neuron ! Note: Does not work for output layer neurons since they have Softmax applied to their value !
-inline model_cost GetSinglePathNeuronCostGradient(neuron_weight SourceWeight, neuron_activation TargetNeuronActivation, neuron_activation DesiredActivation)
-{
-	return SourceWeight * 2 * (TargetNeuronActivation - DesiredActivation) * d_Activation(TargetNeuronActivation);
 }
 
 // Defines an instance of a feedforward process for a Neural Network model. Contains only the activation values for each neurons.
@@ -606,8 +586,6 @@ float PerformBackpropagation(const AIModel_NN& Model, const Feedforward_NN& Feed
 		totalOutputLoss -= cost;
 	}
 
-
-
 	// Backpropagation
 	// Work our way backwards starting from the output layer.
 
@@ -629,8 +607,22 @@ float PerformBackpropagation(const AIModel_NN& Model, const Feedforward_NN& Feed
 			neuron_activation outputCost = -Cost(outputValue, neuronIndex == InputLabel);
 
 			// Compute output delta, the change in overall error for a change in the pre-softmax value of this neuron.
-			neuron_activation outputDelta = outputValue - (InputLabel == neuronIndex);
-			//outputDelta /= OUTPUT_LAYER_SIZE; // Average + reverse sign
+			neuron_activation outputDelta = 0;
+			//if (neuronIndex == InputLabel)
+			//{
+			//	outputDelta = -1 / (outputValue * (1 - outputValue));
+			//}
+			//else
+			//{
+			//	outputDelta = -1 / (-outputValue * networkOutputs[InputLabel]);
+			//}
+
+			if (neuronIndex == InputLabel) {
+				outputDelta = (outputValue - 1.0) * (1.0 - outputValue);
+			}
+			else {
+				outputDelta = (outputValue) * (1.0 - outputValue);
+			}
 
 			// Bias gradient descent
 			// Determine the change in value for all output layer neurons and average them to obtain the "global" descent for the bias.
@@ -644,7 +636,7 @@ float PerformBackpropagation(const AIModel_NN& Model, const Feedforward_NN& Feed
 				const neuron_activation& sourceActivation = Feedforward.layers[layerIndex - 1]->values[sourceNeuronIndex];
 				
 				neuron_activation weightGradient = sourceActivation * d_Activation(outputActivation); // Change in pre-softmax value of this neuron for a change in weight of source neuron.
-				learningLayer.weightChanges[neuronIndex * Model.layers[layerIndex - 1]->size + sourceNeuronIndex] += -(weightGradient * outputDelta);
+				learningLayer.weightChanges[neuronIndex * Model.layers[layerIndex - 1]->size + sourceNeuronIndex] -= weightGradient* outputDelta;
 			}
 
 			// Determine the error to add to each source neuron.
@@ -680,19 +672,20 @@ float PerformBackpropagation(const AIModel_NN& Model, const Feedforward_NN& Feed
 		for (int neuronIndex = 0; neuronIndex < Model.layers[layerIndex]->size; neuronIndex++)
 		{
 			neuron_activation outputActivation = Feedforward.layers[layerIndex]->values[neuronIndex];
-			neuron_activation outputDelta = currentLayerOutputDelta[neuronIndex] * d_Activation(outputActivation);
+			neuron_activation outputDelta = currentLayerOutputDelta[neuronIndex];
 
 			// Bias gradient descent
 
-			learningLayer.biasChanges[neuronIndex] += outputDelta;
+			neuron_activation biasGradient = d_Activation(outputActivation); // Change in pre-softmax value of the output for each added bias.
+			learningLayer.biasChanges[neuronIndex] += -(biasGradient * outputDelta);
 
 			for (int sourceNeuronIndex = 0; sourceNeuronIndex < Model.layers[layerIndex - 1]->size; sourceNeuronIndex++)
 			{
 				// Weight gradient descent
 				neuron_activation sourceActivation = Feedforward.layers[layerIndex - 1]->values[sourceNeuronIndex];
-				neuron_weight weightGradient = sourceActivation * outputDelta;
+				neuron_weight weightGradient = sourceActivation * d_Activation(outputActivation);
 
-				learningLayer.weightChanges[neuronIndex * Model.layers[layerIndex - 1]->size + sourceNeuronIndex] -= weightGradient;
+				learningLayer.weightChanges[neuronIndex * Model.layers[layerIndex - 1]->size + sourceNeuronIndex] -= weightGradient * outputDelta;
 			}
 
 			// Sum up output deltas for previous layer.

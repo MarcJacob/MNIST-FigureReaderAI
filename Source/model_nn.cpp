@@ -173,7 +173,7 @@ AIModel_NN NN_InitModel(uint16_t hiddenLayerCount, uint16_t hiddenLayerSize, boo
 			{
 				for (uint16_t neuronIndex = 0; neuronIndex < newModel.layers[layerIndex]->size; neuronIndex++)
 				{
-					newModel.layers[layerIndex]->weights[targetNeuronIndex * newModel.layers[layerIndex]->size + neuronIndex] = GenRandomWeight(-0.1, 0.1);
+					newModel.layers[layerIndex]->weights[targetNeuronIndex * newModel.layers[layerIndex]->size + neuronIndex] = GenRandomWeight(-1.f / newModel.layers[layerIndex]->size, 1.f / newModel.layers[layerIndex]->size);
 				}
 			}
 		}
@@ -586,81 +586,21 @@ float PerformBackpropagation(const AIModel_NN& Model, const Feedforward_NN& Feed
 		totalOutputLoss -= cost;
 	}
 
-	// Backpropagation
-	// Work our way backwards starting from the output layer.
-
-	// OUTPUT LAYER -> LAST HIDDEN LAYER
-	// The output layer gets Softmax applied to its values so its gradients are different.
+	// Determine the Output layer Output Deltas.
 	{
 		int layerIndex = Model.layerCount - 1;
-		// Learning Layer in which to record the desired changes in weights and biases.
-		Learning_NN::Layer& learningLayer = *Learning.layers[layerIndex - 1];
 
-		// For each neuron in the output, determine the error between the corresponding FeedforwardResult value and desired value.
-		// Then, determine a change in inbound weight values and bias to reduce this error.
-		// Determine the relative error for all inbound neurons and add it to their place in the previous layer desired values array.
-		// Those sums will then be converted back to an actual desired value as a post processing step using their actual value during the feed forward phase, saving memory.
 		for (int neuronIndex = 0; neuronIndex < OUTPUT_LAYER_SIZE; neuronIndex++)
 		{
-			const neuron_activation& outputActivation = Feedforward.layers[layerIndex]->values[neuronIndex]; // Pre-softmax output value
 			const neuron_activation& outputValue = networkOutputs[neuronIndex]; // Post-softmax output value
-			neuron_activation outputCost = -Cost(outputValue, neuronIndex == InputLabel);
 
 			// Compute output delta, the change in overall error for a change in the pre-softmax value of this neuron.
-			neuron_activation outputDelta = 0;
-			//if (neuronIndex == InputLabel)
-			//{
-			//	outputDelta = -1 / (outputValue * (1 - outputValue));
-			//}
-			//else
-			//{
-			//	outputDelta = -1 / (-outputValue * networkOutputs[InputLabel]);
-			//}
-
-			if (neuronIndex == InputLabel) {
-				outputDelta = (outputValue - 1.0) * (1.0 - outputValue);
-			}
-			else {
-				outputDelta = (outputValue) * (1.0 - outputValue);
-			}
-
-			// Bias gradient descent
-			// Determine the change in value for all output layer neurons and average them to obtain the "global" descent for the bias.
-			neuron_activation biasGradient = d_Activation(outputActivation); // Change in pre-softmax value of the output for each added bias.
-			learningLayer.biasChanges[neuronIndex] += -(biasGradient * outputDelta);
-
-			// Weight gradient descent
-			// For each source neuron, determine the change in value for all output layer neurons and average them to obtain the "global" descent for the source weight.
-			for (int sourceNeuronIndex = 0; sourceNeuronIndex < Model.layers[layerIndex - 1]->size; sourceNeuronIndex++)
-			{
-				const neuron_activation& sourceActivation = Feedforward.layers[layerIndex - 1]->values[sourceNeuronIndex];
-				
-				neuron_activation weightGradient = sourceActivation * d_Activation(outputActivation); // Change in pre-softmax value of this neuron for a change in weight of source neuron.
-				learningLayer.weightChanges[neuronIndex * Model.layers[layerIndex - 1]->size + sourceNeuronIndex] -= weightGradient* outputDelta;
-			}
-
-			// Determine the error to add to each source neuron.
-			// To accomplish this, use the neuron's pre-softmax output value so it speaks the same "language" as the hidden layers in terms of scale,
-			// by setting the source neuron's output delta to this neuron's output delta weighed by... weight.
-
-			for (int sourceNeuronIndex = 0; sourceNeuronIndex < Model.layers[layerIndex - 1]->size; sourceNeuronIndex++)
-			{ 
-				const neuron_weight& sourceWeight = Model.layers[layerIndex - 1]->weights[neuronIndex * Model.layers[layerIndex - 1]->size + sourceNeuronIndex];
-				sourceLayerOutputDelta[sourceNeuronIndex] += outputDelta * sourceWeight;
-			}
+			currentLayerOutputDelta[neuronIndex] = outputValue - (neuronIndex == InputLabel);
 		}
-
-		// Switch the output delta buffers.
-		neuron_activation* swap = currentLayerOutputDelta;
-		currentLayerOutputDelta = sourceLayerOutputDelta;
-		sourceLayerOutputDelta = swap;
-
-		// Zero out source layer buffer to make sure no unrelated information survives to the next iteration.
-		memset(sourceLayerOutputDelta, 0, desiredValuesBufferSize);
 	}
 	
-	// HIDDEN LAYERS -> INPUT LAYER
-	for (int layerIndex = Model.layerCount - 2; layerIndex > 0; layerIndex--)
+	// Backpropagation
+	for (int layerIndex = Model.layerCount - 1; layerIndex > 0; layerIndex--)
 	{
 		// Learning Layer in which to record the desired changes in weights and biases.
 		Learning_NN::Layer& learningLayer = *Learning.layers[layerIndex - 1];
@@ -686,23 +626,23 @@ float PerformBackpropagation(const AIModel_NN& Model, const Feedforward_NN& Feed
 				neuron_weight weightGradient = sourceActivation * d_Activation(outputActivation);
 
 				learningLayer.weightChanges[neuronIndex * Model.layers[layerIndex - 1]->size + sourceNeuronIndex] -= weightGradient * outputDelta;
-			}
 
-			// Sum up output deltas for previous layer.
-			if (layerIndex > 1)
-			for (int sourceNeuronIndex = 0; sourceNeuronIndex < Model.layers[layerIndex - 1]->size; sourceNeuronIndex++)
-			{
-				const neuron_weight& sourceWeight = Model.layers[layerIndex - 1]->weights[neuronIndex * Model.layers[layerIndex - 1]->size + sourceNeuronIndex];
-				sourceLayerOutputDelta[sourceNeuronIndex] += outputDelta * sourceWeight;
+				// For all layers after the first hidden layer...
+				if (layerIndex > 1)
+				{
+					// Determine the output delta to transmit to each neuron of the source layer.
+					const neuron_weight& sourceWeight = Model.layers[layerIndex - 1]->weights[neuronIndex * Model.layers[layerIndex - 1]->size + sourceNeuronIndex];
+					sourceLayerOutputDelta[sourceNeuronIndex] += outputDelta * sourceWeight;
+				}
 			}
 		}
 
-		// Switch the desired value buffers.
+		// Switch the value delta buffers.
 		neuron_activation* swap = currentLayerOutputDelta;
 		currentLayerOutputDelta = sourceLayerOutputDelta;
 		sourceLayerOutputDelta = swap;
 
-		// Zero out previous layer buffer to make sure no unrelated information survives to the next iteration.
+		// Zero out source layer buffer
 		memset(sourceLayerOutputDelta, 0, desiredValuesBufferSize);
 	}
 
